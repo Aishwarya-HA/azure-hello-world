@@ -1,17 +1,17 @@
 
-########################################
+############################################
 # Tags
-########################################
+############################################
 locals {
   tags = {
     project = "hello-world"
-    owner   = "aishwarya"
+    owner   = "Aishwarya"
   }
 }
 
-########################################
+############################################
 # Resource Group (guard with validation precondition)
-########################################
+############################################
 resource "azurerm_resource_group" "rg" {
   name     = "${var.prefix}-rg"
   location = var.location
@@ -26,9 +26,9 @@ resource "azurerm_resource_group" "rg" {
   }
 }
 
-########################################
+############################################
 # Network: VNet + Subnet
-########################################
+############################################
 resource "azurerm_virtual_network" "vnet" {
   name                = "${var.prefix}-vnet"
   address_space       = ["10.0.0.0/16"]
@@ -44,9 +44,9 @@ resource "azurerm_subnet" "subnet" {
   address_prefixes     = ["10.0.1.0/24"]
 }
 
-########################################
+############################################
 # NSG (Allow HTTP 80 & SSH 22)
-########################################
+############################################
 resource "azurerm_network_security_group" "nsg" {
   name                = "${var.prefix}-nsg"
   location            = azurerm_resource_group.rg.location
@@ -65,7 +65,7 @@ resource "azurerm_network_security_group" "nsg" {
     destination_address_prefix = "*"
   }
 
-  # TIP: Restrict SSH to your IP or use Bastion in real environments
+  # NOTE: Restrict SSH to your IP in real environments
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -79,19 +79,19 @@ resource "azurerm_network_security_group" "nsg" {
   }
 }
 
-########################################
+############################################
 # Public IP
-########################################
+############################################
 resource "azurerm_public_ip" "pip" {
   name                = "${var.prefix}-pip"
-  resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
   allocation_method   = "Static"
   sku                 = "Standard"
   tags                = local.tags
 }
 
-# Short settle to avoid provider read-after-write flake on PIP
+# Short settle to avoid provider read-after-write flake on pip
 resource "null_resource" "pip_settle" {
   depends_on = [azurerm_public_ip.pip]
 
@@ -100,16 +100,15 @@ resource "null_resource" "pip_settle" {
   }
 }
 
-########################################
-# NIC + NSG Association
-########################################
+############################################
+# NIC & NSG Association
+############################################
 resource "azurerm_network_interface" "nic" {
   name                = "${var.prefix}-nic"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
 
-  # Ensure NIC config runs after the public IP has fully propagated
   depends_on = [null_resource.pip_settle]
 
   ip_configuration {
@@ -125,29 +124,24 @@ resource "azurerm_network_interface_security_group_association" "nic_nsg" {
   network_security_group_id = azurerm_network_security_group.nsg.id
 }
 
-########################################
+############################################
 # Linux VM (Ubuntu 22.04 LTS) + cloud-init
-########################################
+############################################
 resource "azurerm_linux_virtual_machine" "vm" {
   name                = "${var.prefix}-vm"
   resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+  location            = var.location
+  size                = var.vm_size
 
-  # Widely available size. If capacity blocks in your region, try "Standard_A2_v2".
-  size           = "Standard_B2s"
-  admin_username = var.admin_username
-
-  network_interface_ids = [
-    azurerm_network_interface.nic.id
-  ]
-
-  # SSH only (no passwords)
+  admin_username                  = var.admin_username
   disable_password_authentication = true
 
   admin_ssh_key {
     username   = var.admin_username
     public_key = var.ssh_public_key
   }
+
+  network_interface_ids = [azurerm_network_interface.nic.id]
 
   os_disk {
     name                 = "${var.prefix}-osdisk"
