@@ -1,4 +1,7 @@
 
+########################################
+# Locals (tags etc.)
+########################################
 locals {
   tags = {
     project = "hello-world"
@@ -6,17 +9,24 @@ locals {
   }
 }
 
+########################################
+# Resource Group
+########################################
 resource "azurerm_resource_group" "rg" {
   name     = "${var.prefix}-rg"
   location = var.location
   tags     = local.tags
 }
 
+########################################
+# Network: VNet + Subnet
+########################################
 resource "azurerm_virtual_network" "vnet" {
   name                = "${var.prefix}-vnet"
   address_space       = ["10.0.0.0/16"]
-  location            = var.location
+  location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
+  tags                = local.tags
 }
 
 resource "azurerm_subnet" "subnet" {
@@ -26,10 +36,14 @@ resource "azurerm_subnet" "subnet" {
   address_prefixes     = ["10.0.1.0/24"]
 }
 
+########################################
+# NSG (Allow HTTP/80 and SSH/22)
+########################################
 resource "azurerm_network_security_group" "nsg" {
   name                = "${var.prefix}-nsg"
+  location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  location            = var.location
+  tags                = local.tags
 
   security_rule {
     name                       = "AllowHTTP"
@@ -37,47 +51,74 @@ resource "azurerm_network_security_group" "nsg" {
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
+    source_port_range          = "*"
     destination_port_range     = "80"
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
 
+  # TIP: For production, restrict SSH to your IP or use Bastion
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
+    source_port_range          = "*"
     destination_port_range     = "22"
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
 }
 
+########################################
+# Public IP
+########################################
 resource "azurerm_public_ip" "pip" {
   name                = "${var.prefix}-pip"
   resource_group_name = azurerm_resource_group.rg.name
-  location            = var.location
+  location            = azurerm_resource_group.rg.location
   allocation_method   = "Static"
+  sku                 = "Standard"
+  tags                = local.tags
 }
 
+########################################
+# NIC + NSG association
+########################################
 resource "azurerm_network_interface" "nic" {
   name                = "${var.prefix}-nic"
-  location            = var.location
+  location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
+  tags                = local.tags
 
   ip_configuration {
-    name                          = "ipconfig"
+    name                          = "ipconfig1"
     subnet_id                     = azurerm_subnet.subnet.id
     private_ip_address_allocation = "Dynamic"
     public_ip_address_id          = azurerm_public_ip.pip.id
   }
 }
 
+resource "azurerm_network_interface_security_group_association" "nic_nsg" {
+  network_interface_id      = azurerm_network_interface.nic.id
+  network_security_group_id = azurerm_network_security_group.nsg.id
+}
+
+########################################
+# Cloud-init: install NGINX + Hello World
+########################################
+# Make sure terraform/cloud-init.yaml exists and contains the content we wrote earlier.
+# It will be base64-encoded and passed to the VM as custom_data.
+########################################
+
+########################################
+# Linux VM (Ubuntu 22.04 LTS)
+########################################
 resource "azurerm_linux_virtual_machine" "vm" {
   name                = "${var.prefix}-vm"
   resource_group_name = azurerm_resource_group.rg.name
-  location            = var.location
+  location            = azurerm_resource_group.rg.location
   size                = "Standard_B1s"
   admin_username      = var.admin_username
 
@@ -85,14 +126,18 @@ resource "azurerm_linux_virtual_machine" "vm" {
     azurerm_network_interface.nic.id
   ]
 
+  # Use SSH only (no passwords)
+  disable_password_authentication = true
+
   admin_ssh_key {
     username   = var.admin_username
     public_key = var.ssh_public_key
   }
 
   os_disk {
-    storage_account_type = "Standard_LRS"
+    name                 = "${var.prefix}-osdisk"
     caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
   }
 
   source_image_reference {
@@ -102,5 +147,9 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
+  # Read the cloud-init file from this module folder and encode it
   custom_data = base64encode(file("${path.module}/cloud-init.yaml"))
+
+  tags = local.tags
 }
+``
