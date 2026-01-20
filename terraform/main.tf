@@ -1,6 +1,6 @@
 
 ########################################
-# Tags
+# Locals (tags etc.)
 ########################################
 locals {
   tags = {
@@ -19,7 +19,7 @@ resource "azurerm_resource_group" "rg" {
 }
 
 ########################################
-# Networking: VNet + Subnet
+# Network: VNet + Subnet
 ########################################
 resource "azurerm_virtual_network" "vnet" {
   name                = "${var.prefix}-vnet"
@@ -37,7 +37,7 @@ resource "azurerm_subnet" "subnet" {
 }
 
 ########################################
-# NSG (HTTP + SSH)
+# NSG (Allow HTTP/80 and SSH/22)
 ########################################
 resource "azurerm_network_security_group" "nsg" {
   name                = "${var.prefix}-nsg"
@@ -57,7 +57,7 @@ resource "azurerm_network_security_group" "nsg" {
     destination_address_prefix = "*"
   }
 
-  # TIP: restrict to your IP in real environments
+  # TIP: For production, restrict SSH to your IP (e.g., "x.x.x.x/32") or use Bastion.
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -84,7 +84,7 @@ resource "azurerm_public_ip" "pip" {
 }
 
 ########################################
-# NIC + NSG Association
+# NIC + NSG association
 ########################################
 resource "azurerm_network_interface" "nic" {
   name                = "${var.prefix}-nic"
@@ -106,20 +106,23 @@ resource "azurerm_network_interface_security_group_association" "nic_nsg" {
 }
 
 ########################################
-# Linux VM (Ubuntu 22.04) + cloud-init
+# Linux VM (Ubuntu 22.04 LTS) + cloud-init
 ########################################
 resource "azurerm_linux_virtual_machine" "vm" {
   name                = "${var.prefix}-vm"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
-  size                = "Standard_B1s"
-  admin_username      = var.admin_username
+
+  # UPDATED SIZE to avoid SKU unavailability in Central India
+  # If this still fails, try "Standard_B2s" or switch region to "East US" in variables.tf
+  size           = "Standard_B1ms"
+  admin_username = var.admin_username
 
   network_interface_ids = [
     azurerm_network_interface.nic.id
   ]
 
-  # SSH only
+  # Use SSH only (no passwords)
   disable_password_authentication = true
 
   admin_ssh_key {
@@ -140,9 +143,8 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
-  # IMPORTANT: Keep cloud-init in its own file; do not paste its contents here.
+  # Ensure this file exists at terraform/cloud-init.yaml
   custom_data = base64encode(file("${path.module}/cloud-init.yaml"))
 
   tags = local.tags
 }
-
