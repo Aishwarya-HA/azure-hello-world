@@ -50,8 +50,8 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -upgrade
 
-      # 👇 NEW: Import the existing Resource Group into state if it already exists.
-      # Uses TF_VAR_prefix if provided as a secret; falls back to 'hello02'.
+      # --- Import the existing RG if it already exists (idempotent) ---
+      # If you don't set TF_VAR_PREFIX secret, it defaults to 'hello02'
       - name: Terraform Import RG (idempotent)
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
@@ -96,9 +96,11 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           echo "### Terraform Outputs" >> $GITHUB_STEP_SUMMARY
-          terraform output >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Open your site: $(terraform output -raw web_url)" >> $GITHUB_STEP_SUMMARY
+          terraform output >> $GITHUB_STEP_SUMMARY || true
+          if terraform output -raw web_url >/dev/null 2>&1; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Open your site: $(terraform output -raw web_url)" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload TF logs (optional)
         if: always()
@@ -108,4 +110,3 @@ jobs:
           path: |
             terraform/plan.out
             terraform/apply.out
-``
