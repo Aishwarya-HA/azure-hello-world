@@ -37,4 +37,4 @@ variable "ssh_public_key" {
   description = "SSH PUBLIC key contents (output of: cat ~/.ssh/id_rsa.pub)."
   type        = string
 }
-``
+
