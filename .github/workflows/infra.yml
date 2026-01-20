@@ -25,6 +25,8 @@ env:
   TF_WORKING_DIR: ./terraform
   TF_LOG: INFO
   ARM_LOG_LEVEL: info
+  # Unify prefix everywhere via secret (create it if not present)
+  TF_VAR_PREFIX: ${{ secrets.TF_VAR_PREFIX }}
 
 jobs:
   plan-apply:
@@ -50,24 +52,21 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -upgrade
 
-      # Import the existing RG if it already exists (safe to run every time)
-      # If you don't set TF_VAR_PREFIX secret, it will default to 'hello02'
-      - name: Terraform Import RG (idempotent)
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        env:
-          TF_VAR_prefix: ${{ secrets.TF_VAR_PREFIX }}
-        run: |
-          set -euo pipefail
-          RG_PREFIX="${TF_VAR_prefix:-hello02}"
-          RG_NAME="${RG_PREFIX}-rg"
-          echo "Attempting import for RG: ${RG_NAME}"
-          if az group show -n "${RG_NAME}" >/dev/null 2>&1; then
-            terraform import \
-              azurerm_resource_group.rg \
-              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}" || true
-          else
-            echo "Resource group ${RG_NAME} does not exist yet. Continuing."
-          fi
+      # If you still want the import safety net for old local state runs, uncomment:
+      # - name: Terraform Import RG (idempotent)
+      #   working-directory: ${{ env.TF_WORKING_DIR }}
+      #   run: |
+      #     set -euo pipefail
+      #     RG_PREFIX="${TF_VAR_PREFIX:-hello03}"
+      #     RG_NAME="${RG_PREFIX}-rg"
+      #     echo "Attempting import for RG: ${RG_NAME}"
+      #     if az group show -n "${RG_NAME}" >/dev/null 2>&1; then
+      #       terraform import \
+      #         azurerm_resource_group.rg \
+      #         "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}" || true
+      #     else
+      #       echo "Resource group ${RG_NAME} does not exist yet. Continuing."
+      #     fi
 
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -79,13 +78,12 @@ jobs:
         env:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-          TF_VAR_prefix:          ${{ secrets.TF_VAR_PREFIX }}
+          TF_VAR_prefix:          ${{ env.TF_VAR_PREFIX }}
         run: |
           set -euo pipefail
           terraform -version
           terraform validate
           terraform plan -no-color -input=false -out=tfplan | tee plan.out
-          # Ensure a non-empty plan file exists, otherwise fail the step
           test -s tfplan
 
       - name: Terraform Apply (main only)
@@ -94,10 +92,9 @@ jobs:
         env:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-          TF_VAR_prefix:          ${{ secrets.TF_VAR_PREFIX }}
+          TF_VAR_prefix:          ${{ env.TF_VAR_PREFIX }}
         run: |
           set -euo pipefail
-          # Apply only if the plan file is present and non-empty
           test -s tfplan
           terraform apply -no-color -input=false -parallelism=5 -auto-approve tfplan | tee apply.out
 
@@ -120,4 +117,3 @@ jobs:
           path: |
             terraform/plan.out
             terraform/apply.out
-
