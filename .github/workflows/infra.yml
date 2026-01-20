@@ -18,21 +18,19 @@ permissions:
   contents: read
 
 env:
+  # Azure OIDC login
   ARM_USE_OIDC: true
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
 
+  # Terraform settings
   TF_WORKING_DIR: ./terraform
   TF_LOG: INFO
   TF_LOG_LEVEL: INFO
 
-  # Unify prefix everywhere via secret (create it if not present)
+  # Name prefix (kept as a secret, as you had)
   TF_VAR_prefix: ${{ secrets.TF_VAR_PREFIX }}
-
-  # NEW: allow switching region/size via secrets without code changes
-  TF_VAR_location: ${{ secrets.TF_VAR_LOCATION }}   # e.g., "eastus" (default is eastus in code)
-  TF_VAR_vm_size:  ${{ secrets.TF_VAR_VM_SIZE }}    # e.g., "Standard_D2s_v5"
 
 jobs:
   plan-apply:
@@ -54,7 +52,7 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      - name: Terraform Init
+      - name: Terraform Init (upgrade providers)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -upgrade
 
@@ -66,11 +64,12 @@ jobs:
         id: plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
+          # Required TF variables
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
           TF_VAR_prefix:          ${{ env.TF_VAR_prefix }}
-          TF_VAR_location:        ${{ env.TF_VAR_location }}
-          TF_VAR_vm_size:         ${{ env.TF_VAR_vm_size }}
+          # NOTE: We intentionally do NOT set TF_VAR_location or TF_VAR_vm_size here.
+          # Terraform will use defaults from variables.tf (location="eastus", vm_size="Standard_D2s_v5").
         run: |
           set -euo pipefail
           terraform version
@@ -85,8 +84,6 @@ jobs:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
           TF_VAR_prefix:          ${{ env.TF_VAR_prefix }}
-          TF_VAR_location:        ${{ env.TF_VAR_location }}
-          TF_VAR_vm_size:         ${{ env.TF_VAR_vm_size }}
         run: |
           set -euo pipefail
           terraform apply -no-color -input=false -parallelism=5 -auto-approve tfplan | tee apply.out
@@ -109,3 +106,4 @@ jobs:
           path: |
             terraform/plan.out
             terraform/apply.out
+
