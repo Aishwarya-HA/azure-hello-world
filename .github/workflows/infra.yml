@@ -30,7 +30,7 @@ env:
   TF_LOG_LEVEL: INFO
 
   # Name prefix (kept as a secret, as you had)
-  TF_VAR_prefix: ${{ secrets.TF_VAR_PREFIX }}
+  
 
 jobs:
   plan-apply:
@@ -67,7 +67,7 @@ jobs:
           # Required TF variables
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-          TF_VAR_prefix:          ${{ env.TF_VAR_prefix }}
+          
           # NOTE: We intentionally do NOT set TF_VAR_location or TF_VAR_vm_size here.
           # Terraform will use defaults from variables.tf (location="eastus", vm_size="Standard_D2s_v5").
         run: |
@@ -83,7 +83,7 @@ jobs:
         env:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-          TF_VAR_prefix:          ${{ env.TF_VAR_prefix }}
+         
         run: |
           set -euo pipefail
           terraform apply -no-color -input=false -parallelism=1 -auto-approve tfplan | tee apply.out
