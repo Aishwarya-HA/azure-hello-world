@@ -86,7 +86,7 @@ jobs:
           TF_VAR_prefix:          ${{ env.TF_VAR_prefix }}
         run: |
           set -euo pipefail
-          terraform apply -no-color -input=false -parallelism=5 -auto-approve tfplan | tee apply.out
+          terraform apply -no-color -input=false -parallelism=1 -auto-approve tfplan | tee apply.out
 
       - name: Show Outputs
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
