@@ -57,7 +57,7 @@ resource "azurerm_network_security_group" "nsg" {
     destination_address_prefix = "*"
   }
 
-  # TIP: Restrict SSH to your IP in real environments
+  # TIP: For production, restrict SSH to your IP or use Bastion
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -83,6 +83,15 @@ resource "azurerm_public_ip" "pip" {
   tags                = local.tags
 }
 
+# ---- NEW: Short settle to avoid provider read-after-write flake on PIP ----
+resource "null_resource" "pip_settle" {
+  depends_on = [azurerm_public_ip.pip]
+
+  provisioner "local-exec" {
+    command = "sleep 10"
+  }
+}
+
 ########################################
 # NIC + NSG Association
 ########################################
@@ -91,6 +100,9 @@ resource "azurerm_network_interface" "nic" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
+
+  # Ensure NIC is configured after PIP is fully ready/propagated
+  depends_on = [null_resource.pip_settle]
 
   ip_configuration {
     name                          = "ipconfig1"
@@ -113,8 +125,9 @@ resource "azurerm_linux_virtual_machine" "vm" {
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
 
-  # UPDATED SIZE to avoid SKU unavailability
-  size           =  "Standard_B2s"
+  # Updated to a widely available size. If capacity issues persist,
+  # try "Standard_A2_v2" or switch region in variables.tf to "East US 2".
+  size           = "Standard_B2s"
   admin_username = var.admin_username
 
   network_interface_ids = [
@@ -142,7 +155,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
-  # Ensure this file exists at terraform/cloud-init.yaml
+  # Ensure cloud-init.yaml is present in the same folder as this file
   custom_data = base64encode(file("${path.module}/cloud-init.yaml"))
 
   tags = local.tags
