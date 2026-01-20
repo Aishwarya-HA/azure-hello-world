@@ -22,7 +22,7 @@ variable "location" {
 variable "prefix" {
   description = "Prefix used for naming Azure resources (e.g., aish01 → aish01-rg, aish01-vm)."
   type        = string
-  default     = "hello03"
+  default     = "hello04"
 
   # Must start with a letter or number; no spaces; hyphens allowed
   validation {
