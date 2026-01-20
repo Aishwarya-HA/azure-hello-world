@@ -50,14 +50,14 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -upgrade
 
-      # --- Import the existing RG if it already exists (idempotent) ---
-      # If you don't set TF_VAR_PREFIX secret, it defaults to 'hello02'
+      # Import the existing RG if it already exists (safe to run every time)
+      # If you don't set TF_VAR_PREFIX secret, it will default to 'hello02'
       - name: Terraform Import RG (idempotent)
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_prefix: ${{ secrets.TF_VAR_PREFIX }}
         run: |
-          set -e
+          set -euo pipefail
           RG_PREFIX="${TF_VAR_prefix:-hello02}"
           RG_NAME="${RG_PREFIX}-rg"
           echo "Attempting import for RG: ${RG_NAME}"
@@ -80,7 +80,13 @@ jobs:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
           TF_VAR_prefix:          ${{ secrets.TF_VAR_PREFIX }}
-        run: terraform plan -no-color -out=tfplan | tee plan.out
+        run: |
+          set -euo pipefail
+          terraform -version
+          terraform validate
+          terraform plan -no-color -input=false -out=tfplan | tee plan.out
+          # Ensure a non-empty plan file exists, otherwise fail the step
+          test -s tfplan
 
       - name: Terraform Apply (main only)
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -89,7 +95,11 @@ jobs:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
           TF_VAR_prefix:          ${{ secrets.TF_VAR_PREFIX }}
-        run: terraform apply -no-color -parallelism=5 -auto-approve tfplan | tee apply.out
+        run: |
+          set -euo pipefail
+          # Apply only if the plan file is present and non-empty
+          test -s tfplan
+          terraform apply -no-color -input=false -parallelism=5 -auto-approve tfplan | tee apply.out
 
       - name: Show Outputs
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -110,3 +120,4 @@ jobs:
           path: |
             terraform/plan.out
             terraform/apply.out
+
