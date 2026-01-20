@@ -114,7 +114,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
   location            = azurerm_resource_group.rg.location
 
   # UPDATED SIZE to avoid SKU unavailability
-  size           = "Standard_B2s"
+  size           =  "Standard_DS1_v2"
   admin_username = var.admin_username
 
   network_interface_ids = [
