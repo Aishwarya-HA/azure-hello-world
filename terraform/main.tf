@@ -1,6 +1,6 @@
 
 ########################################
-# Locals (tags etc.)
+# Tags
 ########################################
 locals {
   tags = {
@@ -19,7 +19,7 @@ resource "azurerm_resource_group" "rg" {
 }
 
 ########################################
-# Network: VNet + Subnet
+# Networking: VNet + Subnet
 ########################################
 resource "azurerm_virtual_network" "vnet" {
   name                = "${var.prefix}-vnet"
@@ -37,7 +37,7 @@ resource "azurerm_subnet" "subnet" {
 }
 
 ########################################
-# NSG (Allow HTTP/80 and SSH/22)
+# NSG (HTTP + SSH)
 ########################################
 resource "azurerm_network_security_group" "nsg" {
   name                = "${var.prefix}-nsg"
@@ -57,7 +57,7 @@ resource "azurerm_network_security_group" "nsg" {
     destination_address_prefix = "*"
   }
 
-  # TIP: For production, restrict SSH to your IP or use Bastion
+  # TIP: restrict to your IP in real environments
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -84,7 +84,7 @@ resource "azurerm_public_ip" "pip" {
 }
 
 ########################################
-# NIC + NSG association
+# NIC + NSG Association
 ########################################
 resource "azurerm_network_interface" "nic" {
   name                = "${var.prefix}-nic"
@@ -106,14 +106,7 @@ resource "azurerm_network_interface_security_group_association" "nic_nsg" {
 }
 
 ########################################
-# Cloud-init: install NGINX + Hello World
-########################################
-# Make sure terraform/cloud-init.yaml exists and contains the content we wrote earlier.
-# It will be base64-encoded and passed to the VM as custom_data.
-########################################
-
-########################################
-# Linux VM (Ubuntu 22.04 LTS)
+# Linux VM (Ubuntu 22.04) + cloud-init
 ########################################
 resource "azurerm_linux_virtual_machine" "vm" {
   name                = "${var.prefix}-vm"
@@ -126,7 +119,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
     azurerm_network_interface.nic.id
   ]
 
-  # Use SSH only (no passwords)
+  # SSH only
   disable_password_authentication = true
 
   admin_ssh_key {
@@ -147,7 +140,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
-  # Read the cloud-init file from this module folder and encode it
+  # IMPORTANT: Keep cloud-init in its own file; do not paste its contents here.
   custom_data = base64encode(file("${path.module}/cloud-init.yaml"))
 
   tags = local.tags
