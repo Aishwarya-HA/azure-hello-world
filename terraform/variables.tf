@@ -59,4 +59,3 @@ variable "vm_size" {
 }
  
   # You can override via TF_VAR_vm_size if needed
-}
