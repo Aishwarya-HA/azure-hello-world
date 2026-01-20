@@ -1,13 +1,20 @@
 
 terraform {
   required_version = ">= 1.6.0"
+
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      # Pin to a recent stable to avoid "inconsistent result after apply" flake
-      # You can bump this minor version later with `terraform init -upgrade`.
       version = "~> 3.115.0"
     }
+  }
+
+  # 🔒 Remote state so CI always has the same state
+  backend "azurerm" {
+    resource_group_name  = "rg-terraform-state-aish"
+    storage_account_name = "aishterraformstate"   # must be globally unique; adjust if you used a different name
+    container_name       = "tfstate"
+    key                  = "hello-world.tfstate"
   }
 }
 
