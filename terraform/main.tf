@@ -26,6 +26,12 @@ resource "azurerm_resource_group" "rg" {
   }
 }
 
+# Wait after RG creation so the location/RP propagation settles
+resource "time_sleep" "after_rg" {
+  depends_on      = [azurerm_resource_group.rg]
+  create_duration = "15s"
+}
+
 ############################################
 # Network: VNet + Subnet
 ############################################
@@ -35,6 +41,9 @@ resource "azurerm_virtual_network" "vnet" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
+
+  # Ensure ARM has fully realized the RG first
+  depends_on = [time_sleep.after_rg]
 }
 
 resource "azurerm_subnet" "subnet" {
@@ -52,6 +61,8 @@ resource "azurerm_network_security_group" "nsg" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
+
+  depends_on = [time_sleep.after_rg]
 
   security_rule {
     name                       = "AllowHTTP"
@@ -89,15 +100,18 @@ resource "azurerm_public_ip" "pip" {
   allocation_method   = "Static"
   sku                 = "Standard"
   tags                = local.tags
+
+  depends_on = [time_sleep.after_rg]
 }
 
-# Short settle to avoid provider read-after-write flake on pip
-resource "null_resource" "pip_settle" {
-  depends_on = [azurerm_public_ip.pip]
-
-  provisioner "local-exec" {
-    command = "sleep 10"
-  }
+# Wait for Public IP + VNet/Subnet to fully propagate before NIC
+resource "time_sleep" "after_network_primitives" {
+  depends_on = [
+    azurerm_public_ip.pip,
+    azurerm_virtual_network.vnet,
+    azurerm_subnet.subnet
+  ]
+  create_duration = "20s"
 }
 
 ############################################
@@ -109,7 +123,8 @@ resource "azurerm_network_interface" "nic" {
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
 
-  depends_on = [null_resource.pip_settle]
+  # Ensure we wait for propagation before creating the NIC
+  depends_on = [time_sleep.after_network_primitives]
 
   ip_configuration {
     name                          = "ipconfig1"
@@ -133,6 +148,8 @@ resource "azurerm_linux_virtual_machine" "vm" {
   location            = var.location
   size                = var.vm_size
 
+  network_interface_ids = [azurerm_network_interface.nic.id]
+
   admin_username                  = var.admin_username
   disable_password_authentication = true
 
@@ -140,8 +157,6 @@ resource "azurerm_linux_virtual_machine" "vm" {
     username   = var.admin_username
     public_key = var.ssh_public_key
   }
-
-  network_interface_ids = [azurerm_network_interface.nic.id]
 
   os_disk {
     name                 = "${var.prefix}-osdisk"
