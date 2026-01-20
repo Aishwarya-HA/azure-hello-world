@@ -4,7 +4,9 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.100"
+      # Pin to a recent stable to avoid "inconsistent result after apply" flake
+      # You can bump this minor version later with `terraform init -upgrade`.
+      version = "~> 3.115.0"
     }
   }
 }
