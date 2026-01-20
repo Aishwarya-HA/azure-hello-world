@@ -1,33 +1,27 @@
 
 ########################################
-# Tags & safe prefix (sanitized)
+# Tags
 ########################################
 locals {
-  # User/Repo tags
   tags = {
     project = "hello-world"
     owner   = "aishwarya"
   }
-
-  # Sanitize the incoming prefix so all names begin with a letter/number
-  # 1) Trim whitespace; 2) Strip any leading non-alphanumeric characters
-  _prefix_trimmed = trimspace(var.prefix)
-  safe_prefix     = regexreplace(local._prefix_trimmed, "^[^0-9A-Za-z]+", "")
 }
 
 ########################################
-# Resource Group (with guard on safe_prefix)
+# Resource Group (guard with validation precondition)
 ########################################
 resource "azurerm_resource_group" "rg" {
-  name     = "${local.safe_prefix}-rg"
+  name     = "${var.prefix}-rg"
   location = var.location
   tags     = local.tags
 
-  # Fail fast if the computed safe_prefix is still invalid or empty
+  # Extra guard: fail early if prefix becomes invalid
   lifecycle {
     precondition {
-      condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*$", local.safe_prefix))
-      error_message = "Computed safe_prefix is invalid or empty. Check TF_VAR_PREFIX and variables.tf."
+      condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*$", var.prefix))
+      error_message = "var.prefix is invalid. It must start with a letter/number and contain only letters, numbers, or hyphens."
     }
   }
 }
@@ -36,7 +30,7 @@ resource "azurerm_resource_group" "rg" {
 # Network: VNet + Subnet
 ########################################
 resource "azurerm_virtual_network" "vnet" {
-  name                = "${local.safe_prefix}-vnet"
+  name                = "${var.prefix}-vnet"
   address_space       = ["10.0.0.0/16"]
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
@@ -44,7 +38,7 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 resource "azurerm_subnet" "subnet" {
-  name                 = "${local.safe_prefix}-subnet"
+  name                 = "${var.prefix}-subnet"
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = ["10.0.1.0/24"]
@@ -54,7 +48,7 @@ resource "azurerm_subnet" "subnet" {
 # NSG (Allow HTTP 80 & SSH 22)
 ########################################
 resource "azurerm_network_security_group" "nsg" {
-  name                = "${local.safe_prefix}-nsg"
+  name                = "${var.prefix}-nsg"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
@@ -71,7 +65,7 @@ resource "azurerm_network_security_group" "nsg" {
     destination_address_prefix = "*"
   }
 
-  # TIP: Restrict SSH to your IP or use Bastion in production
+  # TIP: Restrict SSH to your IP or use Bastion in real environments
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -89,7 +83,7 @@ resource "azurerm_network_security_group" "nsg" {
 # Public IP
 ########################################
 resource "azurerm_public_ip" "pip" {
-  name                = "${local.safe_prefix}-pip"
+  name                = "${var.prefix}-pip"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   allocation_method   = "Static"
@@ -110,7 +104,7 @@ resource "null_resource" "pip_settle" {
 # NIC + NSG Association
 ########################################
 resource "azurerm_network_interface" "nic" {
-  name                = "${local.safe_prefix}-nic"
+  name                = "${var.prefix}-nic"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
@@ -135,11 +129,11 @@ resource "azurerm_network_interface_security_group_association" "nic_nsg" {
 # Linux VM (Ubuntu 22.04 LTS) + cloud-init
 ########################################
 resource "azurerm_linux_virtual_machine" "vm" {
-  name                = "${local.safe_prefix}-vm"
+  name                = "${var.prefix}-vm"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
 
-  # Widely available size. If capacity blocks in your chosen region, try "Standard_A2_v2".
+  # Widely available size. If capacity blocks in your region, try "Standard_A2_v2".
   size           = "Standard_B2s"
   admin_username = var.admin_username
 
@@ -156,7 +150,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
   }
 
   os_disk {
-    name                 = "${local.safe_prefix}-osdisk"
+    name                 = "${var.prefix}-osdisk"
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
   }
