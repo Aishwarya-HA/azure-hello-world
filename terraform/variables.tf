@@ -13,7 +13,7 @@ variable "subscription_id" {
 variable "location" {
   description = "Azure region for all resources."
   type        = string
-  default     = "eastus"   # Safe region with good capacity
+  default     = "centralindia"  # Safe region with good capacity
 }
 
 ############################################
@@ -54,6 +54,9 @@ variable "ssh_public_key" {
 variable "vm_size" {
   description = "Size of the Azure Linux VM."
   type        = string
-  default     = "Standard_D2s_v5"  
+  default     = "Standard_B2ms" 
+
+}
+ 
   # You can override via TF_VAR_vm_size if needed
 }
