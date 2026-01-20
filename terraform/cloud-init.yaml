@@ -1,0 +1,17 @@
+
+#cloud-config
+package_update: true
+packages:
+  - nginx
+
+write_files:
+  - path: /var/www/html/index.html
+    permissions: '0644'
+    owner: root:root
+    content: |
+      <h1>Hello World!</h1>
+      <p>Deployed using Terraform + GitHub Actions + Azure</p>
+
+runcmd:
+  - systemctl enable nginx
+  - systemctl restart nginx
