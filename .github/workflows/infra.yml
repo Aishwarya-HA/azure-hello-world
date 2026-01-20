@@ -22,11 +22,17 @@ env:
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
   TF_WORKING_DIR: ./terraform
   TF_LOG: INFO
-  ARM_LOG_LEVEL: info
+  TF_LOG_LEVEL: INFO
+
   # Unify prefix everywhere via secret (create it if not present)
-  TF_VAR_PREFIX: ${{ secrets.TF_VAR_PREFIX }}
+  TF_VAR_prefix: ${{ secrets.TF_VAR_PREFIX }}
+
+  # NEW: allow switching region/size via secrets without code changes
+  TF_VAR_location: ${{ secrets.TF_VAR_LOCATION }}   # e.g., "eastus" (default is eastus in code)
+  TF_VAR_vm_size:  ${{ secrets.TF_VAR_VM_SIZE }}    # e.g., "Standard_D2s_v5"
 
 jobs:
   plan-apply:
@@ -48,25 +54,9 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      - name: Terraform Init (upgrade providers)
+      - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init -upgrade
-
-      # If you still want the import safety net for old local state runs, uncomment:
-      # - name: Terraform Import RG (idempotent)
-      #   working-directory: ${{ env.TF_WORKING_DIR }}
-      #   run: |
-      #     set -euo pipefail
-      #     RG_PREFIX="${TF_VAR_PREFIX:-hello03}"
-      #     RG_NAME="${RG_PREFIX}-rg"
-      #     echo "Attempting import for RG: ${RG_NAME}"
-      #     if az group show -n "${RG_NAME}" >/dev/null 2>&1; then
-      #       terraform import \
-      #         azurerm_resource_group.rg \
-      #         "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}" || true
-      #     else
-      #       echo "Resource group ${RG_NAME} does not exist yet. Continuing."
-      #     fi
 
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -78,24 +68,27 @@ jobs:
         env:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-          TF_VAR_prefix:          ${{ env.TF_VAR_PREFIX }}
+          TF_VAR_prefix:          ${{ env.TF_VAR_prefix }}
+          TF_VAR_location:        ${{ env.TF_VAR_location }}
+          TF_VAR_vm_size:         ${{ env.TF_VAR_vm_size }}
         run: |
           set -euo pipefail
-          terraform -version
+          terraform version
           terraform validate
           terraform plan -no-color -input=false -out=tfplan | tee plan.out
           test -s tfplan
 
-      - name: Terraform Apply (main only)
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
           TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
           TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-          TF_VAR_prefix:          ${{ env.TF_VAR_PREFIX }}
+          TF_VAR_prefix:          ${{ env.TF_VAR_prefix }}
+          TF_VAR_location:        ${{ env.TF_VAR_location }}
+          TF_VAR_vm_size:         ${{ env.TF_VAR_vm_size }}
         run: |
           set -euo pipefail
-          test -s tfplan
           terraform apply -no-color -input=false -parallelism=5 -auto-approve tfplan | tee apply.out
 
       - name: Show Outputs
@@ -105,7 +98,6 @@ jobs:
           echo "### Terraform Outputs" >> $GITHUB_STEP_SUMMARY
           terraform output >> $GITHUB_STEP_SUMMARY || true
           if terraform output -raw web_url >/dev/null 2>&1; then
-            echo "" >> $GITHUB_STEP_SUMMARY
             echo "Open your site: $(terraform output -raw web_url)" >> $GITHUB_STEP_SUMMARY
           fi
 
