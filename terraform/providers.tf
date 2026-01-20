@@ -9,12 +9,12 @@ terraform {
     }
   }
 
-  # 🔒 Remote state so CI always has the same state
   backend "azurerm" {
     resource_group_name  = "rg-terraform-state-aish"
-    storage_account_name = "aishterraformstate"   # must be globally unique; adjust if you used a different name
+    storage_account_name = "aishterraformstate"
     container_name       = "tfstate"
     key                  = "hello-world.tfstate"
+    use_azuread_auth     = true
   }
 }
 
