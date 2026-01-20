@@ -13,7 +13,7 @@ variable "location" {
 variable "prefix" {
   description = "Name prefix for all resources."
   type        = string
-  default     = "hello"
+  default     = "hello02"
 }
 
 variable "admin_username" {
