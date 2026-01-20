@@ -57,7 +57,7 @@ resource "azurerm_network_security_group" "nsg" {
     destination_address_prefix = "*"
   }
 
-  # TIP: For production, restrict SSH to your IP (e.g., "x.x.x.x/32") or use Bastion.
+  # TIP: Restrict SSH to your IP in real environments
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -84,7 +84,7 @@ resource "azurerm_public_ip" "pip" {
 }
 
 ########################################
-# NIC + NSG association
+# NIC + NSG Association
 ########################################
 resource "azurerm_network_interface" "nic" {
   name                = "${var.prefix}-nic"
@@ -113,9 +113,8 @@ resource "azurerm_linux_virtual_machine" "vm" {
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
 
-  # UPDATED SIZE to avoid SKU unavailability in Central India
-  # If this still fails, try "Standard_B2s" or switch region to "East US" in variables.tf
-  size           = "Standard_B1ms"
+  # UPDATED SIZE to avoid SKU unavailability
+  size           = "Standard_B2s"
   admin_username = var.admin_username
 
   network_interface_ids = [
