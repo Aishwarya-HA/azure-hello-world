@@ -13,7 +13,7 @@ terraform {
     }
   }
 
-  # Remote state in Azure Storage (uses OIDC/AzureAD auth via your GitHub Action)
+  # Remote state in Azure Storage (uses OIDC/Azure AD auth via your GitHub Action)
   backend "azurerm" {
     resource_group_name  = "rg-terraform-state-aish"
     storage_account_name = "aishterraformstate"
@@ -27,6 +27,8 @@ terraform {
 provider "azurerm" {
   features {}
   subscription_id = var.subscription_id
+  # If you ever see provider registration delays, you can optionally add:
+  # skip_provider_registration = true
 }
 
 # time provider (needed for time_sleep resources)
