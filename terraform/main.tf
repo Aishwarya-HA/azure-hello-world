@@ -57,7 +57,6 @@ resource "azurerm_network_security_group" "nsg" {
     destination_address_prefix = "*"
   }
 
-  # TIP: For production, restrict SSH to your IP or use Bastion
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -83,7 +82,7 @@ resource "azurerm_public_ip" "pip" {
   tags                = local.tags
 }
 
-# ---- NEW: Short settle to avoid provider read-after-write flake on PIP ----
+# Short settle to avoid provider read-after-write flake on PIP
 resource "null_resource" "pip_settle" {
   depends_on = [azurerm_public_ip.pip]
 
@@ -101,7 +100,7 @@ resource "azurerm_network_interface" "nic" {
   resource_group_name = azurerm_resource_group.rg.name
   tags                = local.tags
 
-  # Ensure NIC is configured after PIP is fully ready/propagated
+  # Ensure NIC config runs after the public IP has settled
   depends_on = [null_resource.pip_settle]
 
   ip_configuration {
@@ -125,8 +124,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
 
-  # Updated to a widely available size. If capacity issues persist,
-  # try "Standard_A2_v2" or switch region in variables.tf to "East US 2".
+  # Widely available SKU. If capacity blocks, try "Standard_A2_v2".
   size           = "Standard_B2s"
   admin_username = var.admin_username
 
@@ -134,7 +132,6 @@ resource "azurerm_linux_virtual_machine" "vm" {
     azurerm_network_interface.nic.id
   ]
 
-  # Use SSH only (no passwords)
   disable_password_authentication = true
 
   admin_ssh_key {
@@ -155,7 +152,6 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
-  # Ensure cloud-init.yaml is present in the same folder as this file
   custom_data = base64encode(file("${path.module}/cloud-init.yaml"))
 
   tags = local.tags
