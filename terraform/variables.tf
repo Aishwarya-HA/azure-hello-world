@@ -9,7 +9,7 @@ variable "subscription_id" {
 variable "location" {
   description = "Azure region for all resources."
   type        = string
-  default     = "East US 2"
+  default     = "eastus" # moved from eastus2 to eastus to avoid B2s capacity issue
 }
 
 # Prefix used to build resource names (e.g., <prefix>-rg, <prefix>-vm, etc.)
@@ -21,7 +21,7 @@ variable "prefix" {
 
   validation {
     condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*$", var.prefix))
-    error_message = "prefix must start with an alphanumeric character and contain only letters, numbers, or hyphens (no spaces, no leading hyphen)."
+    error_message = "Prefix must start with an alphanumeric character and contain only letters, numbers, or hyphens (no spaces)."
   }
 }
 
@@ -32,9 +32,15 @@ variable "admin_username" {
   default     = "azureuser"
 }
 
-# SSH PUBLIC key used to access the VM (must be RSA and start with 'ssh-rsa')
+# SSH PUBLIC key used to access the VM (must be RSA or ED25519 public key contents)
 variable "ssh_public_key" {
-  description = "SSH PUBLIC key contents (output of: cat ~/.ssh/id_rsa.pub)."
+  description = "SSH PUBLIC key contents (output of: cat ~/.ssh/id_rsa.pub or id_ed25519.pub)."
   type        = string
 }
 
+# NEW: VM size (parameterized to avoid SkuNotAvailable)
+variable "vm_size" {
+  description = "Azure VM size to deploy."
+  type        = string
+  default     = "Standard_D2s_v5" # safer general-purpose default; you can override via TF_VAR_vm_size
+}
