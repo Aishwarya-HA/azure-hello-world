@@ -54,7 +54,7 @@ variable "ssh_public_key" {
 variable "vm_size" {
   description = "Size of the Azure Linux VM."
   type        = string
-  default     = "Standard_D2_v2"
+  default     =  "Standard_B1s"
 
 }
  
