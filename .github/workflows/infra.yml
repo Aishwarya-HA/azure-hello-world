@@ -3,8 +3,6 @@ name: terraform-azure
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -16,8 +14,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  tf:
-    name: Plan & Apply (two-stage to avoid VNet/Subnet race)
+  stage1:
+    name: Stage 1 – Foundation (RG + VNet + Public IP)
     runs-on: ubuntu-latest
 
     defaults:
@@ -25,7 +23,6 @@ jobs:
         working-directory: ./terraform
 
     env:
-      # Terraform in CI
       TF_IN_AUTOMATION: true
       TF_INPUT: false
 
@@ -33,11 +30,11 @@ jobs:
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
 
-      # Region & size (adjust as you like)
+      # Region & size (adjust if needed)
       TF_VAR_location: "southindia"
       TF_VAR_vm_size:  "Standard_B1ms"
 
-      # Valid prefix (lowercase/digits/hyphens only)
+      # Valid prefix (lowercase/digits/hyphens)
       TF_VAR_prefix: "helloworld"
 
     steps:
@@ -56,7 +53,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # ---------- Formatting ----------
+      # -------- Formatting --------
       - name: Terraform fmt (write)
         run: terraform fmt -recursive
 
@@ -70,7 +67,7 @@ jobs:
       - name: Terraform fmt (check)
         run: terraform fmt -check -diff -recursive
 
-      # ---------- Init & Validate ----------
+      # -------- Init & Validate --------
       - name: Terraform Init
         run: terraform init -upgrade
 
@@ -83,50 +80,4 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
-      # =========================================================
-      # STAGE 1: Foundation (RG + VNet + Public IP)
-      # =========================================================
-      - name: Terraform Plan (stage 1: RG, VNet, PIP)
-        run: terraform plan -target=azurerm_resource_group.rg -target=azurerm_virtual_network.vnet -target=azurerm_public_ip.pip -out=tfplan_stage1 -no-color
-
-      - name: Terraform Apply (stage 1)
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
-        run: terraform apply -auto-approve tfplan_stage1
-
-      # Let Azure converge before Subnet
-      - name: Wait for control-plane settle (after VNet)
-        run: sleep 25
-
-      # =========================================================
-      # STAGE 2: Everything else (Subnet + NIC + VM + outputs)
-      # =========================================================
-      - name: Terraform Plan (stage 2: full)
-        run: |
-          terraform plan -out=tfplan_stage2 -no-color
-          terraform show -no-color tfplan_stage2 > plan_stage2.txt
-
-      - name: Upload plan artifacts (stage 2)
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-${{ github.run_id }}
-          path: |
-            ${{ github.workspace }}/terraform/tfplan_stage2
-            ${{ github.workspace }}/terraform/plan_stage2.txt
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Comment Plan on PR (tail)
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          echo '### Terraform Plan (tail of stage 2)' > pr_comment.md
-          echo '' >> pr_comment.md
-          echo '```' >> pr_comment.md
-          tail -n 200 plan_stage2.txt >> pr_comment.md
-          echo '```' >> pr_comment.md
-          gh pr comment ${{ github.event.pull_request.number }} --body-file pr_comment.md
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Terraform Apply (stage 2)
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
-        run: terraform apply -auto-approve tfplan_stage2
+      # -------- Plan & Apply – Foundation --------
