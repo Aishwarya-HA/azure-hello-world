@@ -67,65 +67,43 @@ resource "azurerm_network_security_group" "nsg" {
   }
 }
 
-# The NIC is created inside the module, so we associate the NSG to the **subnet**
-# (this is simpler and applies to all NICs in this subnet). If you prefer per‑NIC
-# association, we can switch to NIC‑level association — just tell me.
+# Associate NSG to Subnet (simpler than per-NIC association)
 resource "azurerm_subnet_network_security_group_association" "subnet_nsg" {
   subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.nsg.id
 }
 
 ###############################################
-# 5) Cloud-init (user data)
+# 5) Cloud-init (user data) using templatefile()
 ###############################################
-# Renders your existing cloud-init.yaml from the repo
-data "template_file" "cloud_init" {
-  template = file("${path.module}/cloud-init.yaml")
+locals {
+  cloud_init = templatefile("${path.module}/cloud-init.yaml", {})
 }
 
 ###############################################
-# 6) VM Wrapper Module (NIC + VM inside)
+# 6) VM Wrapper Module (creates NIC + VM)
 ###############################################
 module "web_vm" {
   source = "./modules/vm_wrapper"
 
-  # Naming & placement
   name                = var.prefix
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  # Networking (module builds the NIC and attaches the PIP)
   subnet_id    = azurerm_subnet.subnet.id
   public_ip_id = azurerm_public_ip.pip.id
 
-  # Access
   admin_username = var.admin_username
   admin_ssh_key  = var.admin_ssh_key
 
   # ---- Resize knob ----
-  vm_size = var.vm_size  # Change this to resize safely via wrapper
+  vm_size = var.vm_size
 
-  # Cloud-init (must be base64 for azurerm_linux_virtual_machine)
-  custom_data_b64 = base64encode(data.template_file.cloud_init.rendered)
+  # cloud-init must be base64 encoded
+  custom_data_b64 = base64encode(local.cloud_init)
 
-  # Optional tags
   tags = {
     app = "hello-world"
     env = "dev"
   }
-}
-
-###############################################
-# 7) (Optional) Output IP here or in outputs.tf
-###############################################
-# Many teams keep outputs in outputs.tf; if you prefer, keep only there.
-# Shown here for clarity; you can delete this block if you already have the same in outputs.tf.
-output "public_ip" {
-  description = "The public IP address of the VM."
-  value       = azurerm_public_ip.pip.ip_address
-}
-
-output "web_url" {
-  description = "HTTP URL to access the Hello World page."
-  value       = "http://${azurerm_public_ip.pip.ip_address}"
 }
