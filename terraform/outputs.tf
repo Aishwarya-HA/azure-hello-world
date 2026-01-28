@@ -8,11 +8,13 @@ output "web_url" {
   value       = "http://${azurerm_public_ip.pip.ip_address}"
 }
 
-# Optional: useful during debugging
+# Optional: helpful for debugging/visibility
 output "vm_name" {
-  value = module.web_vm.vm_name
+  description = "VM name created by the wrapper"
+  value       = module.web_vm.vm_name
 }
 
 output "private_ip" {
-  value = module.web_vm.private_ip
+  description = "Private IP address of the VM NIC"
+  value       = module.web_vm.private_ip
 }
