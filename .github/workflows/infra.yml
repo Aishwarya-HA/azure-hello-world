@@ -18,24 +18,24 @@ jobs:
       run:
         working-directory: ./terraform
 
-    # Pass Terraform variables from GitHub Secrets
+    # Pass Terraform variables via TF_VAR_* env (Terraform auto-picks these)
     env:
       TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
       TF_VAR_admin_ssh_key:   ${{ secrets.TF_VAR_admin_ssh_key }}
-      # Optional: set a default size from CI if you want
-      # TF_VAR_vm_size: Standard_B1s
+      # Optionally set a size from CI during a resize test:
+      # TF_VAR_vm_size: Standard_B2s
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---- Azure Login using Service Principal JSON ----
+      # === Azure Login using Service Principal JSON (ONLY this, no OIDC triplet) ===
       - name: Azure login (Service Principal JSON)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Sanity check: shows subscription/tenant; useful for debugging
+      # Sanity check – confirms we are authenticated to the right subscription
       - name: Verify Azure CLI
         run: az account show
 
@@ -52,11 +52,11 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan
-        # You can force a resize from CI by uncommenting and adjusting vm_size
+        # If you want to force a resize from the pipeline, uncomment and set vm_size:
         # run: terraform plan -var="vm_size=Standard_B2s" -out=tfplan
         run: terraform plan -out=tfplan
 
-      # Apply only on push to main (not on PRs)
+      # Apply only on pushes to main (not on PRs)
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: terraform apply -auto-approve tfplan
