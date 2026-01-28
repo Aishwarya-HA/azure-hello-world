@@ -11,17 +11,15 @@
 #############################################
 locals {
   # Prefer CI-provided key via TF_VAR_admin_ssh_key. If empty, try a local file.
-  # Use your RSA public key if available; adjust path if your .pub differs.
+  # Update this path if your .pub differs.
   default_pubkey_path = pathexpand("~/.ssh/azure_vm_rsa.pub")
 
   effective_admin_ssh_key = trimspace(var.admin_ssh_key) != "" ? trimspace(var.admin_ssh_key) : (
     fileexists(local.default_pubkey_path) ? trimspace(file(local.default_pubkey_path)) : ""
   )
 
-  # Cloud-init: read if present, otherwise set null (VM will come up without user-data)
-  custom_data_b64 = fileexists("${path.module}/cloud-init.yaml")
-    ? base64encode(file("${path.module}/cloud-init.yaml"))
-    : null
+  # ✅ FIXED: keep the entire conditional on one line
+  custom_data_b64 = fileexists("${path.module}/cloud-init.yaml") ? base64encode(file("${path.module}/cloud-init.yaml")) : null
 
   # Resource names from prefix
   rg_name   = "${var.prefix}-rg"
@@ -66,7 +64,7 @@ resource "azurerm_virtual_network" "vnet" {
 #############################################
 resource "time_sleep" "vnet_settle" {
   depends_on      = [azurerm_virtual_network.vnet]
-  create_duration = "30s" # increase to 40s if your tenant/region is still flaky
+  create_duration = "30s" # bump to 40s if your tenant/region is still flaky
 }
 
 #############################################
@@ -83,7 +81,6 @@ resource "azurerm_subnet" "subnet" {
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = ["10.0.1.0/24"]
 
-  # More patience on initial read helps avoid transient "not found"
   timeouts {
     create = "30m"
     read   = "15m"
@@ -128,7 +125,7 @@ module "web_vm" {
   subnet_id    = azurerm_subnet.subnet.id
   public_ip_id = azurerm_public_ip.pip.id
 
-  # VM config (size & admin user come from variables)
+  # VM config
   vm_size        = var.vm_size
   admin_username = var.admin_username
 
@@ -141,6 +138,5 @@ module "web_vm" {
   # Keep password auth disabled (secure)
   disable_password_authentication = true
 
-  # Tags
   tags = var.tags
 }
