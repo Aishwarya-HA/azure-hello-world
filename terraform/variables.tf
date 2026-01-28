@@ -46,7 +46,7 @@ variable "admin_ssh_key" {
 variable "vm_size" {
   description = "Azure VM size"
   type        = string
-  default     = "Standard_B1s"
+  default     = "Standard D2s v3"
 }
 
 # (Optional) Tags
