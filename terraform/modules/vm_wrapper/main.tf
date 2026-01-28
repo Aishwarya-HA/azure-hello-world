@@ -1,4 +1,4 @@
-# Network interface (created inside wrapper)
+# Network interface (created inside the wrapper)
 resource "azurerm_network_interface" "nic" {
   name                = "${var.name}-nic"
   location            = var.location
@@ -14,7 +14,7 @@ resource "azurerm_network_interface" "nic" {
   tags = var.tags
 }
 
-# The VM itself
+# Linux VM
 resource "azurerm_linux_virtual_machine" "vm" {
   name                = "${var.name}-vm"
   location            = var.location
@@ -42,26 +42,23 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = var.source_image_reference.version
   }
 
-  # Optional: pass cloud-init (custom_data must be base64)
-  dynamic "custom_data" {
-    for_each = var.custom_data_b64 == null ? [] : [1]
-    content  = var.custom_data_b64
-  }
+  # NOTE: 'custom_data' is an attribute, not a block. It's safe to pass null.
+  custom_data = var.custom_data_b64
 
   tags = var.tags
 }
 
 # ----------------- Resize orchestration (wrapper behavior) -----------------
-# In-place resize may fail; safer to deallocate → resize → start via az CLI.
-# We trigger when vm_size changes.
-
+# Reliable flow: deallocate → resize → start via Azure CLI when vm_size changes.
 locals {
   resize_trigger = md5("${azurerm_linux_virtual_machine.vm.id}-${var.vm_size}")
 }
 
 # 1) Deallocate
 resource "null_resource" "deallocate_for_resize" {
-  triggers = { t = local.resize_trigger }
+  triggers = {
+    t = local.resize_trigger
+  }
 
   provisioner "local-exec" {
     command = <<EOT
@@ -78,7 +75,9 @@ resource "null_resource" "deallocate_for_resize" {
 
 # 2) Resize
 resource "null_resource" "apply_resize" {
-  triggers   = { t = local.resize_trigger }
+  triggers = {
+    t = local.resize_trigger
+  }
   depends_on = [null_resource.deallocate_for_resize]
 
   provisioner "local-exec" {
@@ -97,7 +96,9 @@ resource "null_resource" "apply_resize" {
 
 # 3) Start
 resource "null_resource" "start_after_resize" {
-  triggers   = { t = local.resize_trigger }
+  triggers = {
+    t = local.resize_trigger
+  }
   depends_on = [null_resource.apply_resize]
 
   provisioner "local-exec" {
