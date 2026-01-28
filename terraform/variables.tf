@@ -46,7 +46,7 @@ variable "admin_ssh_key" {
 variable "vm_size" {
   description = "Azure VM size (e.g., Standard_B1s, Standard_D2s_v5). Change this to resize the VM."
   type        = string
-  default     = "Standard_B1s"
+  default     = "Standard_D2s_v5"
 }
 
 # (Optional) Tags
