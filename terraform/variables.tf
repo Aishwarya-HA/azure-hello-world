@@ -11,14 +11,14 @@ variable "subscription_id" {
 variable "location" {
   description = "Azure region for all resources."
   type        = string
-  default     = "centralindia"
+  default     = "southindia"
 }
 
 # Naming prefix
 variable "prefix" {
   description = "Prefix used for naming Azure resources (lowercase letters, digits, hyphens)."
   type        = string
-  default     = "helloworld"
+  default     = "Standard_B1ms"
 
   validation {
     condition     = can(regex("^[a-z0-9-]{3,24}$", var.prefix))
