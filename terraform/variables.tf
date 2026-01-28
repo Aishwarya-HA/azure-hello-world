@@ -1,61 +1,51 @@
-
-############################################
-# Subscription ID (required)
-############################################
+################################
+# Subscription / Region
+################################
 variable "subscription_id" {
-  description = "Azure Subscription ID where resources will be deployed."
+  description = "Azure subscription ID where resources will be deployed."
   type        = string
 }
 
-############################################
-# Region
-############################################
 variable "location" {
-  description = "Azure region for all resources."
+  description = "Azure region."
   type        = string
-  default     = "centralindia"  # Safe region with good capacity
+  default     = "eastus"
 }
 
-############################################
-# Resource Name Prefix
-############################################
+################################
+# Naming
+################################
 variable "prefix" {
-  description = "Prefix used for naming Azure resources (e.g., aish01 → aish01-rg, aish01-vm)."
+  description = "Prefix used for naming Azure resources."
   type        = string
-  default     = "hello04"
-
-  # Must start with a letter or number; no spaces; hyphens allowed
+  default     = "helloweb"
   validation {
-    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*$", var.prefix))
-    error_message = "Prefix must start with an alphanumeric character and contain only letters, digits, or hyphens."
+    condition     = can(regex("^[a-z0-9-]{3,24}$", var.prefix))
+    error_message = "prefix must be 3-24 chars with lowercase letters, digits or hyphens."
   }
 }
 
-############################################
-# Admin Username
-############################################
+################################
+# Admin access
+################################
 variable "admin_username" {
   description = "Admin username for SSH access to the VM."
   type        = string
   default     = "azureuser"
 }
 
-############################################
-# SSH Public Key (required)
-############################################
-variable "ssh_public_key" {
-  description = "SSH public key for authentication (contents of ~/.ssh/id_rsa.pub or ~/.ssh/id_ed25519.pub)."
+variable "admin_ssh_key" {
+  description = "SSH public key for authentication (contents of ~/.ssh/id_rsa.pub)."
   type        = string
+  sensitive   = true
 }
 
-############################################
-# VM Size
-############################################
+################################
+# VM size (resize knob)
+################################
 variable "vm_size" {
   description = "Size of the Azure Linux VM."
   type        = string
-  default     = "Standard_D2a_v4"
-
+  default     = "Standard_B1s"
 }
- 
-  # You can override via TF_VAR_vm_size if needed
+``
