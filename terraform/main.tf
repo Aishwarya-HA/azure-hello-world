@@ -5,18 +5,14 @@
 # - Resolves admin_ssh_key from env or local file
 #############################################
 
-# -----------------------------
-# Locals
-# -----------------------------
 locals {
-  # If TF_VAR_admin_ssh_key is not provided, fall back to ~/.ssh/azure_vm.pub
-  default_pubkey_path = pathexpand("~/.ssh/azure_vm.pub")
-
+  # Prefer CI-provided key (TF_VAR_admin_ssh_key). If empty, use local file.
+  default_pubkey_path = pathexpand("~/.ssh/azure_vm_rsa.pub")
   effective_admin_ssh_key = trimspace(var.admin_ssh_key) != "" ? trimspace(var.admin_ssh_key) : (
     fileexists(local.default_pubkey_path) ? trimspace(file(local.default_pubkey_path)) : ""
   )
 
-  # Base64-encode cloud-init (user-data)
+  # Base64-encode cloud-init user-data
   custom_data_b64 = base64encode(file("${path.module}/cloud-init.yaml"))
 
   # Naming
@@ -55,7 +51,7 @@ resource "azurerm_subnet" "subnet" {
 }
 
 # -----------------------------
-# Public IP
+# Public IP (Standard, Static)
 # -----------------------------
 resource "azurerm_public_ip" "pip" {
   name                = local.pip_name
@@ -85,7 +81,7 @@ module "web_vm" {
   vm_size        = var.vm_size
   admin_username = var.admin_username
 
-  # SSH key – resolved from env or ~/.ssh/azure_vm.pub
+  # SSH key – resolved from env or ~/.ssh/azure_vm_rsa.pub
   admin_ssh_key = local.effective_admin_ssh_key
 
   # cloud-init
