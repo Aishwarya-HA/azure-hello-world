@@ -34,7 +34,6 @@ jobs:
       TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
       
 
-      TF_VAR_vm_size: "Standard_B1ms"
 
     steps:
       - name: Checkout
