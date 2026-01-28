@@ -7,10 +7,10 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-# Required for Azure OIDC login and repo checkout
+# Needed for Azure OIDC and to allow auto-commit of formatting changes
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 concurrency:
   group: terraform-azure-${{ github.ref }}
@@ -24,10 +24,12 @@ jobs:
       run:
         working-directory: ./terraform
 
-    # Export TF variables (provider & module inputs)
     env:
+      # Terraform in CI
       TF_IN_AUTOMATION: true
       TF_INPUT: false
+
+      # Provider/module inputs (match your variables.tf)
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
 
@@ -47,21 +49,35 @@ jobs:
         with:
           terraform_wrapper: false  # cleaner logs
 
-      - name: Terraform fmt (check)
-        run: terraform fmt -check -diff
+      # --- Auto-format & auto-commit ---
+      - name: Terraform fmt (write)
+        run: terraform fmt -recursive
 
+      - name: Auto-commit formatting changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: terraform fmt (auto)"
+          file_pattern: |
+            terraform/**/*.tf
+
+      # Optional: double-check formatting after auto-commit
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -diff -recursive
+
+      # --- Standard Terraform flow ---
       - name: Terraform Init
         run: terraform init -upgrade
 
       - name: Terraform Validate
         run: terraform validate
 
-      # Create a readable plan for PRs and store the binary plan as an artifact
       - name: Terraform Plan
         id: plan
         run: |
+          set -e
           terraform plan -out=tfplan -no-color
           terraform show -no-color tfplan > plan.txt
+
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
@@ -72,7 +88,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Comment plan on PRs (optional, nice UX)
+      # Optional: Comment plan on PRs
       - name: Comment Plan on PR
         if: github.event_name == 'pull_request'
         uses: mshick/add-pr-comment@v2
@@ -86,7 +102,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Apply only on pushes to main or manual dispatch
+      # Apply on pushes to main or manual dispatch
       - name: Terraform Apply
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         run: terraform apply -auto-approve tfplan
