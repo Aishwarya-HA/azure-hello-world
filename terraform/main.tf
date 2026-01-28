@@ -1,68 +1,46 @@
-
-############################################
-# Tags
-############################################
-locals {
-  tags = {
-    project = "hello-world"
-    owner   = "Aishwarya"
-  }
-}
-
-############################################
-# Resource Group (guard with validation precondition)
-############################################
+###############################################
+# 1) Resource Group
+###############################################
 resource "azurerm_resource_group" "rg" {
   name     = "${var.prefix}-rg"
   location = var.location
-  tags     = local.tags
-
-  # Extra guard: fail early if prefix becomes invalid
-  lifecycle {
-    precondition {
-      condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*$", var.prefix))
-      error_message = "var.prefix is invalid. It must start with a letter/number and contain only letters, numbers, or hyphens."
-    }
-  }
 }
 
-# Wait after RG creation so the location/RP propagation settles
-resource "time_sleep" "after_rg" {
-  depends_on      = [azurerm_resource_group.rg]
-  create_duration = "15s"
-}
-
-############################################
-# Network: VNet + Subnet
-############################################
+###############################################
+# 2) Networking: VNet + Subnet
+###############################################
 resource "azurerm_virtual_network" "vnet" {
   name                = "${var.prefix}-vnet"
-  address_space       = ["10.0.0.0/16"]
+  address_space       = ["10.10.0.0/16"]
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  tags                = local.tags
-
-  # Ensure ARM has fully realized the RG first
-  depends_on = [time_sleep.after_rg]
 }
 
 resource "azurerm_subnet" "subnet" {
   name                 = "${var.prefix}-subnet"
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.1.0/24"]
+  address_prefixes     = ["10.10.1.0/24"]
 }
 
-############################################
-# NSG (Allow HTTP 80 & SSH 22)
-############################################
+###############################################
+# 3) Public IP
+###############################################
+resource "azurerm_public_ip" "pip" {
+  name                = "${var.prefix}-pip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+###############################################
+# 4) Network Security Group (Allow SSH/HTTP)
+###############################################
 resource "azurerm_network_security_group" "nsg" {
   name                = "${var.prefix}-nsg"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  tags                = local.tags
-
-  depends_on = [time_sleep.after_rg]
 
   security_rule {
     name                       = "AllowHTTP"
@@ -71,12 +49,11 @@ resource "azurerm_network_security_group" "nsg" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "80"
+    destination_port_ranges    = ["80"]
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
 
-  # NOTE: Restrict SSH to your IP in real environments
   security_rule {
     name                       = "AllowSSH"
     priority                   = 110
@@ -84,95 +61,71 @@ resource "azurerm_network_security_group" "nsg" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "22"
+    destination_port_ranges    = ["22"]
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
 }
 
-############################################
-# Public IP
-############################################
-resource "azurerm_public_ip" "pip" {
-  name                = "${var.prefix}-pip"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Static"
-  sku                 = "Standard"
-  tags                = local.tags
-
-  depends_on = [time_sleep.after_rg]
-}
-
-# Wait for Public IP + VNet/Subnet to fully propagate before NIC
-resource "time_sleep" "after_network_primitives" {
-  depends_on = [
-    azurerm_public_ip.pip,
-    azurerm_virtual_network.vnet,
-    azurerm_subnet.subnet
-  ]
-  create_duration = "20s"
-}
-
-############################################
-# NIC & NSG Association
-############################################
-resource "azurerm_network_interface" "nic" {
-  name                = "${var.prefix}-nic"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  tags                = local.tags
-
-  # Ensure we wait for propagation before creating the NIC
-  depends_on = [time_sleep.after_network_primitives]
-
-  ip_configuration {
-    name                          = "ipconfig1"
-    subnet_id                     = azurerm_subnet.subnet.id
-    private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.pip.id
-  }
-}
-
-resource "azurerm_network_interface_security_group_association" "nic_nsg" {
-  network_interface_id      = azurerm_network_interface.nic.id
+# The NIC is created inside the module, so we associate the NSG to the **subnet**
+# (this is simpler and applies to all NICs in this subnet). If you prefer per‑NIC
+# association, we can switch to NIC‑level association — just tell me.
+resource "azurerm_subnet_network_security_group_association" "subnet_nsg" {
+  subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.nsg.id
 }
 
-############################################
-# Linux VM (Ubuntu 22.04 LTS) + cloud-init
-############################################
-resource "azurerm_linux_virtual_machine" "vm" {
-  name                = "${var.prefix}-vm"
+###############################################
+# 5) Cloud-init (user data)
+###############################################
+# Renders your existing cloud-init.yaml from the repo
+data "template_file" "cloud_init" {
+  template = file("${path.module}/cloud-init.yaml")
+}
+
+###############################################
+# 6) VM Wrapper Module (NIC + VM inside)
+###############################################
+module "web_vm" {
+  source = "./modules/vm_wrapper"
+
+  # Naming & placement
+  name                = var.prefix
+  location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  location            = var.location
-  size                = var.vm_size
 
-  network_interface_ids = [azurerm_network_interface.nic.id]
+  # Networking (module builds the NIC and attaches the PIP)
+  subnet_id    = azurerm_subnet.subnet.id
+  public_ip_id = azurerm_public_ip.pip.id
 
-  admin_username                  = var.admin_username
-  disable_password_authentication = true
+  # Access
+  admin_username = var.admin_username
+  admin_ssh_key  = var.admin_ssh_key
 
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.ssh_public_key
+  # ---- Resize knob ----
+  vm_size = var.vm_size  # Change this to resize safely via wrapper
+
+  # Cloud-init (must be base64 for azurerm_linux_virtual_machine)
+  custom_data_b64 = base64encode(data.template_file.cloud_init.rendered)
+
+  # Optional tags
+  tags = {
+    app = "hello-world"
+    env = "dev"
   }
+}
 
-  os_disk {
-    name                 = "${var.prefix}-osdisk"
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
-  }
+###############################################
+# 7) (Optional) Output IP here or in outputs.tf
+###############################################
+# Many teams keep outputs in outputs.tf; if you prefer, keep only there.
+# Shown here for clarity; you can delete this block if you already have the same in outputs.tf.
+output "public_ip" {
+  description = "The public IP address of the VM."
+  value       = azurerm_public_ip.pip.ip_address
+}
 
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts"
-    version   = "latest"
-  }
-
-  # Ensure terraform/cloud-init.yaml exists next to this file
-  custom_data = base64encode(file("${path.module}/cloud-init.yaml"))
-
-  tags = local.tags
+output "web_url" {
+  description = "HTTP URL to access the Hello World page."
+  value       = "http://${azurerm_public_ip.pip.ip_address}"
 }
