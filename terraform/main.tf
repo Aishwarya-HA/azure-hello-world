@@ -3,11 +3,14 @@
 # - Creates RG, VNet, Subnet, Public IP
 # - Calls ./modules/vm_wrapper to create NIC + VM
 # - Resolves admin_ssh_key from env or local file
+# - Adds short delay after RG before VNet/PIP for stability
 #############################################
 
 locals {
   # Prefer CI-provided key (TF_VAR_admin_ssh_key). If empty, use local file.
+  # Update the path to your actual local public key if needed.
   default_pubkey_path = pathexpand("~/.ssh/azure_vm_rsa.pub")
+
   effective_admin_ssh_key = trimspace(var.admin_ssh_key) != "" ? trimspace(var.admin_ssh_key) : (
     fileexists(local.default_pubkey_path) ? trimspace(file(local.default_pubkey_path)) : ""
   )
@@ -33,9 +36,20 @@ resource "azurerm_resource_group" "rg" {
 }
 
 # -----------------------------
+# Small settle delay after RG creation
+# (prevents read-after-write flakiness in Azure control plane)
+# -----------------------------
+resource "time_sleep" "rg_settle" {
+  depends_on      = [azurerm_resource_group.rg]
+  create_duration = "8s"
+}
+
+# -----------------------------
 # Virtual Network + Subnet
 # -----------------------------
 resource "azurerm_virtual_network" "vnet" {
+  depends_on          = [time_sleep.rg_settle]
+
   name                = local.vnet_name
   address_space       = ["10.0.0.0/16"]
   location            = azurerm_resource_group.rg.location
@@ -54,12 +68,23 @@ resource "azurerm_subnet" "subnet" {
 # Public IP (Standard, Static)
 # -----------------------------
 resource "azurerm_public_ip" "pip" {
+  depends_on          = [time_sleep.rg_settle]
+
   name                = local.pip_name
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  allocation_method   = "Static"
-  sku                 = "Standard"
-  tags                = var.tags
+
+  allocation_method = "Static"
+  sku               = "Standard"
+  ip_version        = "IPv4"
+
+  # Extra patience for slower control-plane windows
+  timeouts {
+    create = "30m"
+    update = "30m"
+  }
+
+  tags = var.tags
 }
 
 # -----------------------------
@@ -78,10 +103,10 @@ module "web_vm" {
   public_ip_id = azurerm_public_ip.pip.id
 
   # VM config
-  vm_size        = var.vm_size
+  vm_size        = var.vm_size           # e.g., "Standard_B1ms" to avoid quota issues
   admin_username = var.admin_username
 
-  # SSH key – resolved from env or ~/.ssh/azure_vm_rsa.pub
+  # SSH key – resolved from env or local file path above
   admin_ssh_key = local.effective_admin_ssh_key
 
   # cloud-init
