@@ -10,7 +10,8 @@
 # -----------------------------
 locals {
   # If TF_VAR_admin_ssh_key is not provided, fall back to ~/.ssh/azure_vm.pub
-  default_pubkey_path     = pathexpand("~/.ssh/azure_vm.pub")
+  default_pubkey_path = pathexpand("~/.ssh/azure_vm.pub")
+
   effective_admin_ssh_key = trimspace(var.admin_ssh_key) != "" ? trimspace(var.admin_ssh_key) : (
     fileexists(local.default_pubkey_path) ? trimspace(file(local.default_pubkey_path)) : ""
   )
@@ -94,3 +95,5 @@ module "web_vm" {
   disable_password_authentication = true
 
   # Tags
+  tags = var.tags
+}
