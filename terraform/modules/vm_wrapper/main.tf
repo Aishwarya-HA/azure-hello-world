@@ -66,8 +66,8 @@ resource "azurerm_linux_virtual_machine" "vm" {
   # Ubuntu 22.04 LTS (Jammy)
   source_image_reference {
     publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts"
+    offer     = "UbuntuServer"
+    sku       =  "20_04-lts-gen2"
     version   = "latest"
   }
 
