@@ -1,4 +1,4 @@
-name: Terraform Azure
+name: terraform-azure
 
 on:
   push:
@@ -7,56 +7,86 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+# Required for Azure OIDC login and repo checkout
 permissions:
+  id-token: write
   contents: read
-  id-token: write   # harmless in SP mode; useful if you switch to OIDC later
+
+concurrency:
+  group: terraform-azure-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  plan-apply:
+  tf:
+    name: Plan & Apply
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ./terraform
 
-    # Pass Terraform variables via TF_VAR_* env (Terraform auto-picks these)
+    # Export TF variables (provider & module inputs)
     env:
-      TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
-      TF_VAR_admin_ssh_key:   ${{ secrets.TF_VAR_admin_ssh_key }}
-      # Optionally set a size from CI during a resize test:
-      # TF_VAR_vm_size: Standard_B2s
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # === Azure Login using Service Principal JSON (ONLY this, no OIDC triplet) ===
-      - name: Azure login (Service Principal JSON)
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      # Sanity check – confirms we are authenticated to the right subscription
-      - name: Verify Azure CLI
-        run: az account show
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false  # cleaner logs
+
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -diff
 
       - name: Terraform Init
         run: terraform init -upgrade
 
-      - name: Terraform Fmt
-        run: terraform fmt -check
-
       - name: Terraform Validate
         run: terraform validate
 
+      # Create a readable plan for PRs and store the binary plan as an artifact
       - name: Terraform Plan
-        # If you want to force a resize from the pipeline, uncomment and set vm_size:
-        # run: terraform plan -var="vm_size=Standard_B2s" -out=tfplan
-        run: terraform plan -out=tfplan
+        id: plan
+        run: |
+          terraform plan -out=tfplan -no-color
+          terraform show -no-color tfplan > plan.txt
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: |
+            terraform/tfplan
+            terraform/plan.txt
+          if-no-files-found: error
+          retention-days: 7
 
-      # Apply only on pushes to main (not on PRs)
+      # Comment plan on PRs (optional, nice UX)
+      - name: Comment Plan on PR
+        if: github.event_name == 'pull_request'
+        uses: mshick/add-pr-comment@v2
+        with:
+          message: |
+            ### Terraform Plan
+            ```
+            ${{ steps.plan.outputs.stdout || '' }}
+            ```
+          allow-repeats: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Apply only on pushes to main or manual dispatch
       - name: Terraform Apply
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         run: terraform apply -auto-approve tfplan
