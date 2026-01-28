@@ -7,6 +7,7 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+# Needed for Azure OIDC and to allow auto-commit of formatting changes
 permissions:
   id-token: write
   contents: write
@@ -24,8 +25,11 @@ jobs:
         working-directory: ./terraform
 
     env:
+      # Terraform in CI
       TF_IN_AUTOMATION: true
       TF_INPUT: false
+
+      # Provider/module inputs (map to your variables.tf)
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
 
@@ -43,9 +47,9 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: false
+          terraform_wrapper: false  # cleaner logs
 
-      # Auto-format & auto-commit
+      # ---- Auto-format & auto-commit ----
       - name: Terraform fmt (write)
         run: terraform fmt -recursive
 
@@ -59,6 +63,7 @@ jobs:
       - name: Terraform fmt (check)
         run: terraform fmt -check -diff -recursive
 
+      # ---- Init & Validate ----
       - name: Terraform Init
         run: terraform init -upgrade
 
@@ -71,32 +76,39 @@ jobs:
         run: |
           terraform plan -out=tfplan -no-color
           terraform show -no-color tfplan > plan.txt
-          echo "PLAN_OK=1" >> $GITHUB_OUTPUT
 
-      # Upload artifacts from the current working directory (./terraform)
+      # Quick sanity to visualize where files are
+      - name: List plan files
+        run: |
+          echo "Workspace: $GITHUB_WORKSPACE"
+          ls -la ${{ github.workspace }}/terraform
+
+      # Upload artifacts using ABSOLUTE PATHS (Option 1)
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.run_id }}
           path: |
-            tfplan
-            plan.txt
+            ${{ github.workspace }}/terraform/tfplan
+            ${{ github.workspace }}/terraform/plan.txt
           if-no-files-found: error
           retention-days: 7
 
-      # Optional: comment plan on PRs – read the plan.txt and post that content
-      - name: Comment Plan on PR
+      # Optional: simple PR comment (you can remove this if you don't need it)
+      - name: Comment Plan on PR (tail)
         if: github.event_name == 'pull_request'
-        uses: mshick/add-pr-comment@v2
-        with:
-          message: |
-            ### Terraform Plan
-            ```
-            ${{ steps.plan.outputs.PLAN_OK && fromJSON('["dummy"]') && '' }}
-            ```
-            <details><summary>plan.txt</summary>
+        run: |
+          echo '### Terraform Plan (tail)' > pr_comment.md
+          echo '' >> pr_comment.md
+          echo '```' >> pr_comment.md
+          tail -n 200 plan.txt >> pr_comment.md
+          echo '```' >> pr_comment.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file pr_comment.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-            ```
-            ${{ github.workspace && '' }}
-            ```
-            </details>
+      # ---- APPLY ----
+      # Applies automatically on pushes to main or manual dispatch
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        run: terraform apply -auto-approve tfplan
