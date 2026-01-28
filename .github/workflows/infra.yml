@@ -9,7 +9,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write   # harmless in SP mode; useful if you switch to OIDC later
 
 jobs:
   plan-apply:
@@ -18,52 +18,45 @@ jobs:
       run:
         working-directory: ./terraform
 
+    # Pass Terraform variables from GitHub Secrets
     env:
-      # Pass TF variables from repo secrets.
-      # Terraform automatically reads TF_VAR_* as input variables.
-      TF_VAR_admin_ssh_key: ${{ secrets.TF_VAR_admin_ssh_key }}
-      TF_VAR_subscription_id: ${{ secrets.TF_VAR_subscription_id }}
-      # Optional: pin a default size from CI if you want (usually set in tfvars or variables.tf)
+      TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
+      TF_VAR_admin_ssh_key:   ${{ secrets.TF_VAR_admin_ssh_key }}
+      # Optional: set a default size from CI if you want
       # TF_VAR_vm_size: Standard_B1s
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Azure authentication (required before Terraform so the wrapper's az CLI steps can run)
-      - name: Azure login (OIDC)
+      # ---- Azure Login using Service Principal JSON ----
+      - name: Azure login (Service Principal JSON)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # (Optional) Show context to verify login
+      # Sanity check: shows subscription/tenant; useful for debugging
       - name: Verify Azure CLI
         run: az account show
 
-      # Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.7.5
 
-      # Initialize Terraform
       - name: Terraform Init
         run: terraform init -upgrade
 
-      # Format & Validate
       - name: Terraform Fmt
         run: terraform fmt -check
 
       - name: Terraform Validate
         run: terraform validate
 
-      # --- Plan
       - name: Terraform Plan
-        # You can override vm_size from the workflow by uncommenting -var
+        # You can force a resize from CI by uncommenting and adjusting vm_size
         # run: terraform plan -var="vm_size=Standard_B2s" -out=tfplan
         run: terraform plan -out=tfplan
 
-      # --- Apply only on push to main (not on PR)
+      # Apply only on push to main (not on PRs)
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: terraform apply -auto-approve tfplan
