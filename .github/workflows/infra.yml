@@ -15,20 +15,21 @@ concurrency:
 
 jobs:
   plan_apply:
-    name: Plan & Apply (two-stage in one job)
+    name: Plan & Apply (single run, no -target)
     runs-on: ubuntu-latest
-
     defaults:
       run:
         working-directory: ./terraform
-
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
 
-      # Terraform variables (adjust as needed)
+      # TF variables (adjust if needed)
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
+
+      # Region + size: you picked South India earlier; if capacity is tight,
+      # you can switch to Central India without touching code elsewhere.
       TF_VAR_location: "centralindia"
       TF_VAR_vm_size:  "Standard_B1s"
       TF_VAR_prefix:   "helloworld"
@@ -49,7 +50,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # ---------- Formatting ----------
+      # Formatting (kept but safe)
       - name: Terraform fmt (write)
         run: terraform fmt -recursive
 
@@ -62,44 +63,22 @@ jobs:
       - name: Terraform fmt (check)
         run: terraform fmt -check -diff -recursive
 
-      # ---------- Init & Validate ----------
+      # Plan & apply (single run, no -target)
       - name: Terraform init
         run: terraform init -upgrade
 
-      - name: Echo TF vars
-        run: echo "prefix=${TF_VAR_prefix} location=${TF_VAR_location} vm_size=${TF_VAR_vm_size}"
+      - name: Terraform plan
+        run: terraform plan -out=tfplan -no-color && terraform show -no-color tfplan > plan.txt
 
-      - name: Terraform validate
-        run: terraform validate
-
-      # =========================================================
-      # STAGE 1: Foundation (RG + VNet + PIP)
-      # =========================================================
-      - name: Terraform plan (stage 1)
-        run: terraform plan -target=azurerm_resource_group.rg -target=azurerm_virtual_network.vnet -target=azurerm_public_ip.pip -out=tfplan_stage1 -no-color
-
-      - name: Terraform apply (stage 1)
-        run: terraform apply -auto-approve tfplan_stage1
-
-      # Convergence wait so Subnet read-after-write is stable
-      - name: Wait after VNet
-        run: sleep 25
-
-      # =========================================================
-      # STAGE 2: Everything else (Subnet + NIC + VM)
-      # =========================================================
-      - name: Terraform plan (stage 2)
-        run: terraform plan -out=tfplan_stage2 -no-color && terraform show -no-color tfplan_stage2 > plan_stage2.txt
-
-      - name: Upload plan artifact (stage 2)
+      - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.run_id }}
           path: |
-            ${{ github.workspace }}/terraform/tfplan_stage2
-            ${{ github.workspace }}/terraform/plan_stage2.txt
+            ${{ github.workspace }}/terraform/tfplan
+            ${{ github.workspace }}/terraform/plan.txt
           if-no-files-found: error
           retention-days: 7
 
-      - name: Terraform apply (stage 2)
-        run: terraform apply -auto-approve tfplan_stage2
+      - name: Terraform apply
+        run: terraform apply -auto-approve tfplan
