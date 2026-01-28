@@ -23,7 +23,7 @@ variable "subnet_id" {
 }
 
 variable "public_ip_id" {
-  description = "Public IP ID to attach to NIC"
+  description = "Public IP ID to attach to NIC (null to skip attaching a PIP)"
   type        = string
   default     = null
 }
@@ -33,24 +33,31 @@ variable "admin_username" {
   type        = string
 }
 
-# IMPORTANT: OpenSSH PUBLIC key string (contents of .pub file)
+# IMPORTANT: OpenSSH PUBLIC key string (contents of your .pub file)
 variable "admin_ssh_key" {
   description = "OpenSSH public key (the contents of your .pub file)."
   type        = string
   sensitive   = true
 
+  # Ensure it's non-empty (fixes provider error when password auth is disabled)
   validation {
-    condition     = trim(var.admin_ssh_key) != ""
-    error_message = "admin_ssh_key must be non-empty. Pass a valid public key string from the caller."
+    condition     = trimspace(var.admin_ssh_key) != ""
+    error_message = "admin_ssh_key must be non-empty. Pass a valid OpenSSH public key string."
   }
+
+  # Optional: stricter validation (uncomment to enforce SSH key format)
+  # validation {
+  #   condition = can(regex("^(ssh-(rsa|ed25519)|ecdsa-sha2-nistp(256|384|521))\\s+\\S+", trimspace(var.admin_ssh_key)))
+  #   error_message = "admin_ssh_key must look like a valid OpenSSH public key line (e.g., 'ssh-ed25519 AAAA...')."
+  # }
 }
 
 variable "vm_size" {
-  description = "VM Size (Standard_B1s, Standard_D2s_v5, ...)"
+  description = "VM Size (e.g., Standard_B1s, Standard_D2s_v5, ...)"
   type        = string
 }
 
-# Pass base64-encoded cloud-init from the root
+# Pass base64-encoded cloud-init from the root (can be null if unused)
 variable "custom_data_b64" {
   description = "Base64-encoded cloud-init user data."
   type        = string
