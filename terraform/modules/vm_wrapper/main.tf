@@ -1,3 +1,6 @@
+#############################################
+# NIC
+#############################################
 resource "azurerm_network_interface" "nic" {
   name                = "${var.name}-nic"
   location            = var.location
@@ -13,8 +16,11 @@ resource "azurerm_network_interface" "nic" {
   tags = var.tags
 }
 
+#############################################
+# Linux VM
+#############################################
 resource "azurerm_linux_virtual_machine" "vm" {
-  name                = "${var.name}-vm"
+  name                = var.name
   location            = var.location
   resource_group_name = var.resource_group_name
 
@@ -22,6 +28,10 @@ resource "azurerm_linux_virtual_machine" "vm" {
   admin_username        = var.admin_username
   network_interface_ids = [azurerm_network_interface.nic.id]
 
+  # Enforce key-based auth (recommended)
+  disable_password_authentication = var.disable_password_authentication
+
+  # Required when password auth is disabled
   admin_ssh_key {
     username   = var.admin_username
     public_key = var.admin_ssh_key
@@ -33,6 +43,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
     storage_account_type = "Standard_LRS"
   }
 
+  # Ubuntu 22.04 LTS (Jammy)
   source_image_reference {
     publisher = "Canonical"
     offer     = "0001-com-ubuntu-server-jammy"
@@ -40,7 +51,15 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
+  # cloud-init: azurerm expects base64-encoded string
   custom_data = var.custom_data_b64
 
   tags = var.tags
+
+  # Prevent noisy diffs on admin_ssh_key if you only change vm_size
+  lifecycle {
+    ignore_changes = [
+      admin_ssh_key
+    ]
+  }
 }
