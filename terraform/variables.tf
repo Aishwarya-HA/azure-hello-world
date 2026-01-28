@@ -44,7 +44,7 @@ variable "admin_ssh_key" {
 
 # VM sizing (resize knob)
 variable "vm_size" {
-  description = "Azure VM size (e.g., Standard_B1s, Standard_D2s_v5). Change this to resize the VM."
+  description = "Azure VM size"
   type        = string
   default     = "Standard_B1s"
 }
