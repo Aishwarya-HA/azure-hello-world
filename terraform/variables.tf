@@ -11,7 +11,7 @@ variable "subscription_id" {
 variable "location" {
   description = "Azure region for all resources."
   type        = string
-  default     = "centralindia"
+  default     =  "eastus"
 }
 
 # Naming prefix
@@ -46,7 +46,7 @@ variable "admin_ssh_key" {
 variable "vm_size" {
   description = "Azure VM size"
   type        = string
-  default     =  "Standard_F2s_v2"
+  default     = "Standard_DC1s_v3"
 }
 
 # (Optional) Tags
