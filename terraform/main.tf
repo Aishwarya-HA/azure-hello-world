@@ -1,24 +1,29 @@
 #############################################
-# Terraform Azure – Root main.tf
-# - Creates RG, VNet, Subnet, Public IP
-# - Calls ./modules/vm_wrapper to create NIC + VM
-# - Resolves admin_ssh_key from env or local file
-# - Adds short delay after RG before VNet/PIP for stability
+# Root main.tf
+# - RG → settle → VNet → settle → Subnet (timeouts)
+# - Public IP (timeouts)
+# - Passes values to ./modules/vm_wrapper (NIC + VM)
+# - SSH key and cloud-init handled safely
 #############################################
 
+#############################################
+# Locals: SSH key, cloud-init, names
+#############################################
 locals {
-  # Prefer CI-provided key (TF_VAR_admin_ssh_key). If empty, use local file.
-  # Update the path to your actual local public key if needed.
+  # Prefer CI-provided key via TF_VAR_admin_ssh_key. If empty, try a local file.
+  # Use your RSA public key if available; adjust path if your .pub differs.
   default_pubkey_path = pathexpand("~/.ssh/azure_vm_rsa.pub")
 
   effective_admin_ssh_key = trimspace(var.admin_ssh_key) != "" ? trimspace(var.admin_ssh_key) : (
     fileexists(local.default_pubkey_path) ? trimspace(file(local.default_pubkey_path)) : ""
   )
 
-  # Base64-encode cloud-init user-data
-  custom_data_b64 = base64encode(file("${path.module}/cloud-init.yaml"))
+  # Cloud-init: read if present, otherwise set null (VM will come up without user-data)
+  custom_data_b64 = fileexists("${path.module}/cloud-init.yaml")
+    ? base64encode(file("${path.module}/cloud-init.yaml"))
+    : null
 
-  # Naming
+  # Resource names from prefix
   rg_name   = "${var.prefix}-rg"
   vnet_name = "${var.prefix}-vnet"
   snet_name = "${var.prefix}-snet"
@@ -26,27 +31,26 @@ locals {
   vm_name   = "${var.prefix}-vm"
 }
 
-# -----------------------------
+#############################################
 # Resource Group
-# -----------------------------
+#############################################
 resource "azurerm_resource_group" "rg" {
   name     = local.rg_name
   location = var.location
   tags     = var.tags
 }
 
-# -----------------------------
-# Small settle delay after RG creation
-# (prevents read-after-write flakiness in Azure control plane)
-# -----------------------------
+#############################################
+# Settle after RG (helps PIP/VNet reads)
+#############################################
 resource "time_sleep" "rg_settle" {
   depends_on      = [azurerm_resource_group.rg]
-  create_duration = "8s"
+  create_duration = "12s"
 }
 
-# -----------------------------
-# Virtual Network + Subnet
-# -----------------------------
+#############################################
+# Virtual Network
+#############################################
 resource "azurerm_virtual_network" "vnet" {
   depends_on          = [time_sleep.rg_settle]
 
@@ -57,16 +61,39 @@ resource "azurerm_virtual_network" "vnet" {
   tags                = var.tags
 }
 
+#############################################
+# Extra settle after VNet (avoid 404 on Subnet read)
+#############################################
+resource "time_sleep" "vnet_settle" {
+  depends_on      = [azurerm_virtual_network.vnet]
+  create_duration = "30s" # increase to 40s if your tenant/region is still flaky
+}
+
+#############################################
+# Subnet (explicitly depends on VNet + settle)
+#############################################
 resource "azurerm_subnet" "subnet" {
+  depends_on = [
+    azurerm_virtual_network.vnet,
+    time_sleep.vnet_settle
+  ]
+
   name                 = local.snet_name
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = ["10.0.1.0/24"]
+
+  # More patience on initial read helps avoid transient "not found"
+  timeouts {
+    create = "30m"
+    read   = "15m"
+    delete = "30m"
+  }
 }
 
-# -----------------------------
-# Public IP (Standard, Static)
-# -----------------------------
+#############################################
+# Public IP (Standard, Static) with timeouts
+#############################################
 resource "azurerm_public_ip" "pip" {
   depends_on          = [time_sleep.rg_settle]
 
@@ -78,7 +105,6 @@ resource "azurerm_public_ip" "pip" {
   sku               = "Standard"
   ip_version        = "IPv4"
 
-  # Extra patience for slower control-plane windows
   timeouts {
     create = "30m"
     update = "30m"
@@ -87,9 +113,9 @@ resource "azurerm_public_ip" "pip" {
   tags = var.tags
 }
 
-# -----------------------------
+#############################################
 # VM + NIC via wrapper module
-# -----------------------------
+#############################################
 module "web_vm" {
   source = "./modules/vm_wrapper"
 
@@ -98,18 +124,18 @@ module "web_vm" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  # Networking
+  # Networking (from resources above)
   subnet_id    = azurerm_subnet.subnet.id
   public_ip_id = azurerm_public_ip.pip.id
 
-  # VM config
-  vm_size        = var.vm_size           # e.g., "Standard_B1ms" to avoid quota issues
+  # VM config (size & admin user come from variables)
+  vm_size        = var.vm_size
   admin_username = var.admin_username
 
-  # SSH key – resolved from env or local file path above
+  # SSH key — required when password auth is disabled
   admin_ssh_key = local.effective_admin_ssh_key
 
-  # cloud-init
+  # cloud-init: base64 string or null
   custom_data_b64 = local.custom_data_b64
 
   # Keep password auth disabled (secure)
