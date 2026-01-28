@@ -2,14 +2,14 @@
 # Terraform Azure – Root main.tf
 # - Creates RG, VNet, Subnet, Public IP
 # - Calls ./modules/vm_wrapper to create NIC + VM
-# - Ensures admin_ssh_key is never empty
+# - Resolves admin_ssh_key from env or local file
 #############################################
 
 # -----------------------------
 # Locals
 # -----------------------------
 locals {
-  # Prefer CI-provided key (TF_VAR_admin_ssh_key). If empty, use local file.
+  # If TF_VAR_admin_ssh_key is not provided, fall back to ~/.ssh/azure_vm.pub
   default_pubkey_path     = pathexpand("~/.ssh/azure_vm.pub")
   effective_admin_ssh_key = trimspace(var.admin_ssh_key) != "" ? trimspace(var.admin_ssh_key) : (
     fileexists(local.default_pubkey_path) ? trimspace(file(local.default_pubkey_path)) : ""
@@ -60,20 +60,9 @@ resource "azurerm_public_ip" "pip" {
   name                = local.pip_name
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-
-  allocation_method = "Static"
-  sku               = "Standard"
-  tags              = var.tags
-}
-
-# -----------------------------
-# Safety check – ensure SSH key present
-# (Prevents confusing apply-time errors)
-# -----------------------------
-locals {
-  _validate_ssh_key = length(local.effective_admin_ssh_key) > 0 ? true : (
-    throw("admin_ssh_key is empty. Provide TF_VAR_admin_ssh_key or ensure ~/.ssh/azure_vm.pub exists and is non-empty.")
-  )
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags                = var.tags
 }
 
 # -----------------------------
@@ -95,21 +84,13 @@ module "web_vm" {
   vm_size        = var.vm_size
   admin_username = var.admin_username
 
-  # SSH key – guaranteed non-empty by locals
+  # SSH key – resolved from env or ~/.ssh/azure_vm.pub
   admin_ssh_key = local.effective_admin_ssh_key
 
   # cloud-init
   custom_data_b64 = local.custom_data_b64
 
-  # Recommended: keep password auth disabled
+  # Keep password auth disabled (secure)
   disable_password_authentication = true
 
   # Tags
-  tags = var.tags
-}
-
-# -----------------------------
-# Helpful notes:
-# - To resize: change var.vm_size and apply.
-# - Module includes lifecycle ignore on admin_ssh_key (as provided).
-# -----------------------------
