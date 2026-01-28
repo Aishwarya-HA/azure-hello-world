@@ -25,16 +25,78 @@ jobs:
     env:
       TF_IN_AUTOMATION: true
       TF_INPUT: false
-
-      # Provider/module inputs
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
+      TF_VAR_location: "southindia"      # change if you like
+      TF_VAR_vm_size:  "Standard_B1ms"   # 1 vCPU (quota-safe)
+      TF_VAR_prefix: "helloworld"        # lowercase/digits/hyphens only
 
-      # Region & size (adjust if needed)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      # ---------- Formatting ----------
+      - name: Terraform fmt (write)
+        run: terraform fmt -recursive
+
+      - name: Auto-commit formatting changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: terraform fmt (auto)"
+          file_pattern: |
+            terraform/**/*.tf
+
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -diff -recursive
+
+      # ---------- Init, Validate ----------
+      - name: Terraform Init
+        run: terraform init -upgrade
+
+      - name: Echo TF vars (debug)
+        run: |
+          echo "prefix=${TF_VAR_prefix}"
+          echo "location=${TF_VAR_location}"
+          echo "vm_size=${TF_VAR_vm_size}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      # ---------- Plan & Apply – Foundation ----------
+      - name: Terraform Plan (stage 1: RG, VNet, PIP)
+        run: terraform plan -target=azurerm_resource_group.rg -target=azurerm_virtual_network.vnet -target=azurerm_public_ip.pip -out=tfplan_stage1 -no-color
+
+      - name: Terraform Apply (stage 1)
+        run: terraform apply -auto-approve tfplan_stage1
+
+  stage2:
+    name: Stage 2 – Subnet + NIC + VM
+    runs-on: ubuntu-latest
+    needs: stage1
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
       TF_VAR_location: "southindia"
       TF_VAR_vm_size:  "Standard_B1ms"
-
-      # Valid prefix (lowercase/digits/hyphens)
       TF_VAR_prefix: "helloworld"
 
     steps:
@@ -53,31 +115,27 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # -------- Formatting --------
-      - name: Terraform fmt (write)
-        run: terraform fmt -recursive
-
-      - name: Auto-commit formatting changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: terraform fmt (auto)"
-          file_pattern: |
-            terraform/**/*.tf
-
-      - name: Terraform fmt (check)
-        run: terraform fmt -check -diff -recursive
-
-      # -------- Init & Validate --------
       - name: Terraform Init
         run: terraform init -upgrade
 
-      - name: Echo TF vars (debug)
+      # Wait so Azure control-plane fully converges VNet before Subnet
+      - name: Wait for control-plane settle (after VNet)
+        run: sleep 25
+
+      - name: Terraform Plan (stage 2: full)
         run: |
-          echo "prefix=${TF_VAR_prefix}"
-          echo "location=${TF_VAR_location}"
-          echo "vm_size=${TF_VAR_vm_size}"
+          terraform plan -out=tfplan_stage2 -no-color
+          terraform show -no-color tfplan_stage2 > plan_stage2.txt
 
-      - name: Terraform Validate
-        run: terraform validate
+      - name: Upload plan artifacts (stage 2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: |
+            ${{ github.workspace }}/terraform/tfplan_stage2
+            ${{ github.workspace }}/terraform/plan_stage2.txt
+          if-no-files-found: error
+          retention-days: 7
 
-      # -------- Plan & Apply – Foundation --------
+      - name: Terraform Apply (stage 2)
+        run: terraform apply -auto-approve tfplan_stage2
