@@ -5,13 +5,9 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.111"
     }
-    template = {
-      source  = "hashicorp/template"
-      version = "~> 2.2.0"
-    }
   }
 
-  # Optional: Remote state backend (recommended)
+  # Optional: remote state backend (configure if you already use it)
   # backend "azurerm" {
   #   resource_group_name  = "rg-terraform-state"
   #   storage_account_name = "mystatetfstorage"
@@ -25,6 +21,3 @@ provider "azurerm" {
   features {}
   subscription_id = var.subscription_id
 }
-
-# Needed for data "template_file" rendering cloud-init
-provider "template" {}
