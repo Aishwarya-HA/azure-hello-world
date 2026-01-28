@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-# Needed for Azure OIDC and to allow auto-commit of formatting changes
+# Needed for Azure OIDC and for auto-commit of formatting changes
 permissions:
   id-token: write
   contents: write
@@ -18,8 +18,10 @@ concurrency:
 
 jobs:
   tf:
-    name: Plan & Apply
+    name: Plan & Apply (two-stage to avoid VNet/Subnet race)
     runs-on: ubuntu-latest
+
+    # All shell steps below run from ./terraform
     defaults:
       run:
         working-directory: ./terraform
@@ -29,11 +31,17 @@ jobs:
       TF_IN_AUTOMATION: true
       TF_INPUT: false
 
-      # Provider/module inputs (map to your variables.tf)
+      # Provider/module inputs
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
-      
 
+      # Pin the region & size from CI so nothing overrides them
+      # (You can change these two lines if you prefer a different region/size)
+      TF_VAR_location: "southindia"
+      TF_VAR_vm_size:  "Standard_B1ms"
+
+      # Keep a valid, simple prefix (lowercase, digits, hyphens)
+      TF_VAR_prefix: "helloworld"
 
     steps:
       - name: Checkout
@@ -49,9 +57,9 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: false  # cleaner logs
+          terraform_wrapper: false   # cleaner logs
 
-      # ---- Auto-format & auto-commit ----
+      # ----------- Formatting -----------
       - name: Terraform fmt (write)
         run: terraform fmt -recursive
 
@@ -65,52 +73,72 @@ jobs:
       - name: Terraform fmt (check)
         run: terraform fmt -check -diff -recursive
 
-      # ---- Init & Validate ----
+      # ----------- Init & Validate -----------
       - name: Terraform Init
         run: terraform init -upgrade
+
+      - name: Echo TF vars (debug)
+        run: |
+          echo "prefix=${TF_VAR_prefix}"
+          echo "location=${TF_VAR_location}"
+          echo "vm_size=${TF_VAR_vm_size}"
 
       - name: Terraform Validate
         run: terraform validate
 
-      # ---- PLAN ----
-      - name: Terraform Plan
-        id: plan
+      # =========================================================
+      # STAGE 1: Foundation (RG + VNet + Public IP)
+      #   - Create network foundations separately
+      #   - This avoids the read-after-write window that trips Subnet
+      # =========================================================
+      - name: Terraform Plan (stage 1: RG, VNet, PIP)
         run: |
-          terraform plan -out=tfplan -no-color
-          terraform show -no-color tfplan > plan.txt
+          terraform plan \
+            -target=azurerm_resource_group.rg \
+            -target=azurerm_virtual_network.vnet \
+            -target=azurerm_public_ip.pip \
+            -out=tfplan_stage1 -no-color
 
-      # Quick sanity to visualize where files are
-      - name: List plan files
+      - name: Terraform Apply (stage 1)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        run: terraform apply -auto-approve tfplan_stage1
+
+      # Give Azure control-plane time to converge before Subnet
+      - name: Wait for control-plane settle (after VNet)
+        # On PRs we still sleep (harmless) to keep parity with push runs
+        run: sleep 25
+
+      # =========================================================
+      # STAGE 2: Everything else (Subnet + NIC + VM + outputs)
+      # =========================================================
+      - name: Terraform Plan (stage 2: full)
         run: |
-          echo "Workspace: $GITHUB_WORKSPACE"
-          ls -la ${{ github.workspace }}/terraform
+          terraform plan -out=tfplan_stage2 -no-color
+          terraform show -no-color tfplan_stage2 > plan_stage2.txt
 
-      # Upload artifacts using ABSOLUTE PATHS (Option 1)
-      - name: Upload plan artifact
+      - name: Upload plan artifacts (stage 2)
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ github.run_id }}
           path: |
-            ${{ github.workspace }}/terraform/tfplan
-            ${{ github.workspace }}/terraform/plan.txt
+            ${{ github.workspace }}/terraform/tfplan_stage2
+            ${{ github.workspace }}/terraform/plan_stage2.txt
           if-no-files-found: error
           retention-days: 7
 
-      # Optional: simple PR comment (you can remove this if you don't need it)
+      # Optional: comment plan tail on PRs (nice UX)
       - name: Comment Plan on PR (tail)
         if: github.event_name == 'pull_request'
         run: |
-          echo '### Terraform Plan (tail)' > pr_comment.md
+          echo '### Terraform Plan (tail of stage 2)' > pr_comment.md
           echo '' >> pr_comment.md
           echo '```' >> pr_comment.md
-          tail -n 200 plan.txt >> pr_comment.md
+          tail -n 200 plan_stage2.txt >> pr_comment.md
           echo '```' >> pr_comment.md
           gh pr comment ${{ github.event.pull_request.number }} --body-file pr_comment.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---- APPLY ----
-      # Applies automatically on pushes to main or manual dispatch
-      - name: Terraform Apply
+      - name: Terraform Apply (stage 2)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve tfplan_stage2
