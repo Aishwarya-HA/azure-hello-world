@@ -1,0 +1,607 @@
+name: "🏷️ Semantic Versioning & Release"
+
+on:
+#   push:
+#     branches:
+#       - main
+#     paths-ignore:
+#       - 'docs/**'
+#       - '*.md'
+#       - '.gitignore'
+#       - 'LICENSE'
+#   pull_request:
+#     types: [closed]
+#     branches:
+#       - main
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+      custom_version:
+        description: 'Custom version (optional, overrides version_type)'
+        required: false
+        type: string
+      force_release:
+        description: 'Force release even if no significant changes detected'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  TERRAFORM_VERSION: '1.5.0'
+
+jobs:
+  # Stage 0: Check if this is a valid trigger for release
+  check-trigger:
+    name: "🔍 Check Release Trigger"
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check-conditions.outputs.should_release }}
+      trigger_reason: ${{ steps.check-conditions.outputs.trigger_reason }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: "🔍 Check Release Conditions"
+      id: check-conditions
+      run: |
+        echo "🔍 Checking if this trigger should create a release..."
+
+        # Manual workflow dispatch - always proceed
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          echo "trigger_reason=Manual workflow dispatch" >> $GITHUB_OUTPUT
+          echo "✅ Manual release triggered"
+          exit 0
+        fi
+
+        # Pull request closed - check if merged
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "trigger_reason=Successful PR merge to main" >> $GITHUB_OUTPUT
+            echo "✅ Pull request successfully merged to main"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "trigger_reason=Pull request closed without merge" >> $GITHUB_OUTPUT
+            echo "❌ Pull request was closed but not merged"
+          fi
+          exit 0
+        fi
+
+        # Push to main - check if this is a merge commit or direct push
+        if [ "${{ github.event_name }}" = "push" ]; then
+          # Check if this is a merge commit (has multiple parents)
+          PARENT_COUNT=$(git cat-file -p ${{ github.sha }} | grep "^parent " | wc -l)
+
+          if [ "$PARENT_COUNT" -gt 1 ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "trigger_reason=Merge commit to main" >> $GITHUB_OUTPUT
+            echo "✅ Merge commit detected on main branch"
+          else
+            # Direct push to main - still allow but note it
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "trigger_reason=Direct push to main" >> $GITHUB_OUTPUT
+            echo "⚠️ Direct push to main branch (consider using PRs)"
+          fi
+          exit 0
+        fi
+
+        # Fallback - should not reach here
+        echo "should_release=false" >> $GITHUB_OUTPUT
+        echo "trigger_reason=Unknown trigger event" >> $GITHUB_OUTPUT
+        echo "❌ Unknown trigger event: ${{ github.event_name }}"
+
+  # Stage 1: Analyze Changes and Determine Version
+  analyze-changes:
+    name: "🔍 Analyze Changes & Determine Version"
+    runs-on: ubuntu-latest
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_release == 'true'
+    outputs:
+      version_type: ${{ steps.determine-version.outputs.version_type }}
+      new_version: ${{ steps.determine-version.outputs.new_version }}
+      previous_version: ${{ steps.get-previous-version.outputs.previous_version }}
+      has_breaking_changes: ${{ steps.analyze-commits.outputs.has_breaking_changes }}
+      has_features: ${{ steps.analyze-commits.outputs.has_features }}
+      has_fixes: ${{ steps.analyze-commits.outputs.has_fixes }}
+      changelog_content: ${{ steps.generate-changelog.outputs.changelog_content }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for commit analysis
+
+    - name: "🏷️ Get Previous Version"
+      id: get-previous-version
+      run: |
+        # Get the latest tag
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "previous_version=$LATEST_TAG" >> $GITHUB_OUTPUT
+        echo "📋 Previous version: $LATEST_TAG"
+
+    - name: "📊 Analyze Commits Since Last Tag"
+      id: analyze-commits
+      run: |
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+        if [ -z "$LATEST_TAG" ]; then
+          # No previous tags, analyze all commits
+          COMMITS=$(git log --oneline --format="%s")
+          echo "📋 Analyzing all commits (no previous tags)"
+        else
+          # Analyze commits since last tag
+          COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline --format="%s")
+          echo "📋 Analyzing commits since $LATEST_TAG"
+        fi
+
+        echo "Commits to analyze:"
+        echo "$COMMITS"
+
+        # Check for breaking changes
+        if echo "$COMMITS" | grep -qE "^[^:]+!:|BREAKING CHANGE|^feat!|^fix!|^refactor!"; then
+          echo "has_breaking_changes=true" >> $GITHUB_OUTPUT
+          echo "💥 Breaking changes detected"
+        else
+          echo "has_breaking_changes=false" >> $GITHUB_OUTPUT
+          echo "✅ No breaking changes detected"
+        fi
+
+        # Check for new features
+        if echo "$COMMITS" | grep -qE "^feat[^!]?:|^feature:"; then
+          echo "has_features=true" >> $GITHUB_OUTPUT
+          echo "✨ New features detected"
+        else
+          echo "has_features=false" >> $GITHUB_OUTPUT
+          echo "ℹ️ No new features detected"
+        fi
+
+        # Check for bug fixes
+        if echo "$COMMITS" | grep -qE "^fix[^!]?:|^bugfix:"; then
+          echo "has_fixes=true" >> $GITHUB_OUTPUT
+          echo "🐛 Bug fixes detected"
+        else
+          echo "has_fixes=false" >> $GITHUB_OUTPUT
+          echo "ℹ️ No bug fixes detected"
+        fi
+
+    - name: "🎯 Determine Version Type"
+      id: determine-version
+      run: |
+        # Manual override from workflow dispatch
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.custom_version }}" ]; then
+          echo "version_type=custom" >> $GITHUB_OUTPUT
+          echo "new_version=${{ inputs.custom_version }}" >> $GITHUB_OUTPUT
+          echo "🎯 Using custom version: ${{ inputs.custom_version }}"
+          exit 0
+        elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "version_type=${{ inputs.version_type }}" >> $GITHUB_OUTPUT
+          echo "🎯 Using manual version type: ${{ inputs.version_type }}"
+        else
+          # Automatic determination based on commit analysis
+          if [ "${{ steps.analyze-commits.outputs.has_breaking_changes }}" = "true" ]; then
+            echo "version_type=major" >> $GITHUB_OUTPUT
+            echo "🎯 MAJOR version bump (breaking changes detected)"
+          elif [ "${{ steps.analyze-commits.outputs.has_features }}" = "true" ]; then
+            echo "version_type=minor" >> $GITHUB_OUTPUT
+            echo "🎯 MINOR version bump (new features detected)"
+          elif [ "${{ steps.analyze-commits.outputs.has_fixes }}" = "true" ]; then
+            echo "version_type=patch" >> $GITHUB_OUTPUT
+            echo "🎯 PATCH version bump (bug fixes detected)"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_release }}" = "true" ]; then
+            echo "version_type=patch" >> $GITHUB_OUTPUT
+            echo "🎯 PATCH version bump (forced release)"
+          else
+            echo "version_type=patch" >> $GITHUB_OUTPUT
+            echo "🎯 PATCH version bump (default for other changes)"
+          fi
+        fi
+
+        # Calculate new version if not custom
+        if [ "${{ github.event_name }}" != "workflow_dispatch" ] || [ -z "${{ inputs.custom_version }}" ]; then
+          CURRENT_VERSION="${{ steps.get-previous-version.outputs.previous_version }}"
+
+          # Remove 'v' prefix if present
+          CURRENT_VERSION=${CURRENT_VERSION#v}
+
+          # Split version into components
+          IFS='.' read -r -a VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR=${VERSION_PARTS[0]:-0}
+          MINOR=${VERSION_PARTS[1]:-0}
+          PATCH=${VERSION_PARTS[2]:-0}
+
+          # Determine version type for manual workflow dispatch
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION_TYPE="${{ inputs.version_type }}"
+          else
+            VERSION_TYPE=$(echo "$GITHUB_OUTPUT" | grep "version_type=" | cut -d'=' -f2 | tail -1)
+          fi
+
+          case $VERSION_TYPE in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "📋 New version calculated: $NEW_VERSION"
+        fi
+
+    - name: "📝 Generate Changelog Entry"
+      id: generate-changelog
+      run: |
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        NEW_VERSION="${{ steps.determine-version.outputs.new_version }}"
+
+        if [ -z "$LATEST_TAG" ]; then
+          COMMITS=$(git log --oneline --format="- %s (%h)")
+        else
+          COMMITS=$(git log ${LATEST_TAG}..HEAD --oneline --format="- %s (%h)")
+        fi
+
+        # Create temporary file for changelog content
+        TEMP_FILE="/tmp/changelog_${GITHUB_RUN_ID}.txt"
+
+        # Generate changelog entry header
+        echo "## [$NEW_VERSION] - $(date +%Y-%m-%d)" > "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+        echo "### Summary" >> "$TEMP_FILE"
+        echo "" >> "$TEMP_FILE"
+
+        if [ "${{ steps.analyze-commits.outputs.has_breaking_changes }}" = "true" ]; then
+          echo "⚠️ **BREAKING CHANGES** - This release contains breaking changes. Please review migration guide below." >> "$TEMP_FILE"
+          echo "" >> "$TEMP_FILE"
+        fi
+
+        if [ "${{ steps.analyze-commits.outputs.has_features }}" = "true" ]; then
+          echo "### ✨ Added" >> "$TEMP_FILE"
+          echo "$COMMITS" | grep -E "^- feat[^!]?:|^- feature:" >> "$TEMP_FILE" || echo "- No feature commits found" >> "$TEMP_FILE"
+          echo "" >> "$TEMP_FILE"
+        fi
+
+        if [ "${{ steps.analyze-commits.outputs.has_fixes }}" = "true" ]; then
+          echo "### 🐛 Fixed" >> "$TEMP_FILE"
+          echo "$COMMITS" | grep -E "^- fix[^!]?:|^- bugfix:" >> "$TEMP_FILE" || echo "- No fix commits found" >> "$TEMP_FILE"
+          echo "" >> "$TEMP_FILE"
+        fi
+
+        # Add breaking changes section
+        if [ "${{ steps.analyze-commits.outputs.has_breaking_changes }}" = "true" ]; then
+          echo "### 💥 Breaking Changes" >> "$TEMP_FILE"
+          echo "$COMMITS" | grep -E "^- [^:]+!:|BREAKING CHANGE|^- feat!|^- fix!|^- refactor!" >> "$TEMP_FILE" || echo "- No breaking change commits found" >> "$TEMP_FILE"
+          echo "" >> "$TEMP_FILE"
+          echo "### Migration Guide" >> "$TEMP_FILE"
+          echo "Please review the breaking changes above and update your module usage accordingly." >> "$TEMP_FILE"
+          echo "" >> "$TEMP_FILE"
+        fi
+
+        # Add other changes
+        OTHER_COMMITS=$(echo "$COMMITS" | grep -vE "^- feat[^!]?:|^- feature:|^- fix[^!]?:|^- bugfix:|^- [^:]+!:" || echo "")
+        if [ -n "$OTHER_COMMITS" ]; then
+          echo "### 🔧 Other Changes" >> "$TEMP_FILE"
+          echo "$OTHER_COMMITS" >> "$TEMP_FILE"
+          echo "" >> "$TEMP_FILE"
+        fi
+
+        # Save changelog content to GitHub output using delimiter
+        echo "changelog_content<<EOF" >> $GITHUB_OUTPUT
+        cat "$TEMP_FILE" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        # Also save the file path for potential future use
+        echo "changelog_file=$TEMP_FILE" >> $GITHUB_OUTPUT
+
+        echo "📝 Generated changelog entry for $NEW_VERSION"
+        echo "📄 Changelog content preview:"
+        head -10 "$TEMP_FILE"
+
+  # Stage 2: Module Validation Before Release
+  validate-module:
+    name: "✅ Validate Module Before Release"
+    needs: [check-trigger, analyze-changes]
+    runs-on: ubuntu-latest
+    if: needs.check-trigger.outputs.should_release == 'true' && needs.analyze-changes.result == 'success'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+        terraform_wrapper: false
+
+    - name: "🔍 Pre-Release Module Validation"
+      run: |
+        echo "🔍 Running comprehensive module validation before release..."
+
+        # Validate module structure
+        if [ ! -f "main.tf" ] || [ ! -f "variables.tf" ] || [ ! -f "outputs.tf" ]; then
+          echo "❌ Missing required module files"
+          exit 1
+        fi
+
+        # Validate Terraform configuration
+        terraform init -backend=false
+        terraform validate
+
+        # Check for version constraints
+        if ! grep -r "required_version" . --include="*.tf" > /dev/null; then
+          echo "❌ Module must have Terraform version constraints for release"
+          exit 1
+        fi
+
+        # Check for provider requirements
+        if ! grep -r "required_providers" . --include="*.tf" > /dev/null; then
+          echo "❌ Module must specify provider requirements for release"
+          exit 1
+        fi
+
+        # Validate documentation
+        if [ ! -f "README.md" ]; then
+          echo "❌ README.md is required for release"
+          exit 1
+        fi
+
+        # Check for proper variable documentation
+        UNDOCUMENTED_VARS=$(grep -c "description.*=" variables.tf 2>/dev/null || echo "0")
+        TOTAL_VARS=$(grep -c "^variable" variables.tf 2>/dev/null || echo "0")
+
+        if [ "$TOTAL_VARS" -gt 0 ] && [ "$UNDOCUMENTED_VARS" -lt "$TOTAL_VARS" ]; then
+          echo "⚠️ Warning: Some variables lack descriptions ($UNDOCUMENTED_VARS/$TOTAL_VARS documented)"
+        fi
+
+        echo "✅ Module validation passed - ready for release"
+
+    - name: "🔒 Security Validation for Release"
+      run: |
+        echo "🔒 Running security validation for release..."
+
+        # Check for hardcoded secrets (improved check that excludes comments and variable declarations)
+        POTENTIAL_SECRETS=$(grep -ri "password\s*=\|secret\s*=\|key\s*=" . --include="*.tf" | grep -v "^\s*#" | grep -v "^\s*//" | grep -v "description\s*=" | grep -v "variable\s*\"" | grep -v "output\s*\"" | grep -v "locals\s*{" | grep -v "default\s*=" | head -3)
+
+        if [ -n "$POTENTIAL_SECRETS" ]; then
+          echo "❌ Potential hardcoded secrets detected:"
+          echo "$POTENTIAL_SECRETS"
+          echo ""
+          echo "Please ensure no actual secrets are hardcoded in Terraform files."
+          echo "Use variables, environment variables, or secret management systems instead."
+          exit 1
+        fi
+
+        # Check for proper tagging implementation
+        if ! grep -r "tags.*=" . --include="*.tf" > /dev/null; then
+          echo "⚠️ Warning: No tagging implementation found"
+        fi
+
+        echo "✅ Security validation passed"
+
+  # Stage 3: Create Release and Tag
+  create-release:
+    name: "🚀 Create Release & Tag"
+    needs: [check-trigger, analyze-changes, validate-module]
+    runs-on: ubuntu-latest
+    if: needs.check-trigger.outputs.should_release == 'true' && needs.validate-module.result == 'success'
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: "📝 Update CHANGELOG.md"
+      run: |
+        NEW_VERSION="${{ needs.analyze-changes.outputs.new_version }}"
+
+        # Get changelog content from previous job output
+        CHANGELOG_CONTENT="${{ needs.analyze-changes.outputs.changelog_content }}"
+
+        # Verify changelog content exists
+        if [ -z "$CHANGELOG_CONTENT" ]; then
+          echo "❌ No changelog content found from previous job"
+          exit 1
+        fi
+
+        # Create new CHANGELOG.md with the new entry at the top
+        if [ -f "CHANGELOG.md" ]; then
+          # Backup current changelog
+          cp CHANGELOG.md CHANGELOG.md.bak
+
+          # Create new changelog with new entry
+          echo "# Changelog" > CHANGELOG.md.new
+          echo "" >> CHANGELOG.md.new
+          echo "All notable changes to this Terraform modules project will be documented in this file." >> CHANGELOG.md.new
+          echo "" >> CHANGELOG.md.new
+          echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> CHANGELOG.md.new
+          echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> CHANGELOG.md.new
+          echo "" >> CHANGELOG.md.new
+          echo "$CHANGELOG_CONTENT" >> CHANGELOG.md.new
+          echo "" >> CHANGELOG.md.new
+
+          # Append existing changelog (skip header if it exists)
+          if [ $(wc -l < CHANGELOG.md) -gt 7 ]; then
+            tail -n +8 CHANGELOG.md >> CHANGELOG.md.new
+          fi
+          mv CHANGELOG.md.new CHANGELOG.md
+        else
+          # Create new changelog
+          echo "# Changelog" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "All notable changes to this Terraform modules project will be documented in this file." >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)," >> CHANGELOG.md
+          echo "and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)." >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "$CHANGELOG_CONTENT" >> CHANGELOG.md
+        fi
+
+        echo "📝 Updated CHANGELOG.md with $NEW_VERSION"
+
+    - name: "🏷️ Create Git Tag"
+      run: |
+        NEW_VERSION="${{ needs.analyze-changes.outputs.new_version }}"
+
+        # Configure git
+        git config --local user.email "premkumar.chell@hcltech.com"
+        git config --local user.name "Premc1978"
+
+        # Commit changelog update
+        git add CHANGELOG.md
+        git commit -m "chore: update changelog for $NEW_VERSION [skip ci]"
+
+        # Create tag with changelog content
+        git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
+
+        git push origin main
+        git push origin "$NEW_VERSION"
+
+        echo "🏷️ Created and pushed tag: $NEW_VERSION"
+
+    - name: "📦 Create GitHub Release"
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ needs.analyze-changes.outputs.new_version }}
+        release_name: "Release ${{ needs.analyze-changes.outputs.new_version }}"
+        body: ${{ needs.analyze-changes.outputs.changelog_content }}
+        draft: false
+        prerelease: ${{ contains(needs.analyze-changes.outputs.new_version, 'alpha') || contains(needs.analyze-changes.outputs.new_version, 'beta') || contains(needs.analyze-changes.outputs.new_version, 'rc') }}
+
+    - name: "📊 Release Summary"
+      run: |
+        echo "## 🚀 Module Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📋 Release Information" >> $GITHUB_STEP_SUMMARY
+        echo "- **New Version**: ${{ needs.analyze-changes.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Previous Version**: ${{ needs.analyze-changes.outputs.previous_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version Type**: ${{ needs.analyze-changes.outputs.version_type }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Change Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "- **Breaking Changes**: ${{ needs.analyze-changes.outputs.has_breaking_changes == 'true' && '⚠️ Yes' || '✅ No' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **New Features**: ${{ needs.analyze-changes.outputs.has_features == 'true' && '✨ Yes' || 'ℹ️ No' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Bug Fixes**: ${{ needs.analyze-changes.outputs.has_fixes == 'true' && '🐛 Yes' || 'ℹ️ No' }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🎯 Usage" >> $GITHUB_STEP_SUMMARY
+        echo "To use this version of the module:" >> $GITHUB_STEP_SUMMARY
+        echo '```hcl' >> $GITHUB_STEP_SUMMARY
+        echo 'module "example" {' >> $GITHUB_STEP_SUMMARY
+        echo '  source = "git::https://github.com/${{ github.repository }}.git?ref=${{ needs.analyze-changes.outputs.new_version }}"' >> $GITHUB_STEP_SUMMARY
+        echo '  # module configuration...' >> $GITHUB_STEP_SUMMARY
+        echo '}' >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ needs.analyze-changes.outputs.has_breaking_changes }}" = "true" ]; then
+          echo "### ⚠️ Migration Required" >> $GITHUB_STEP_SUMMARY
+          echo "This release contains breaking changes. Please review the changelog and migration guide before upgrading." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ✅ Safe to Upgrade" >> $GITHUB_STEP_SUMMARY
+          echo "This release is backwards compatible and safe to upgrade." >> $GITHUB_STEP_SUMMARY
+        fi
+
+  # Stage 4: Notify and Update Documentation
+  post-release:
+    name: "📢 Post-Release Actions"
+    needs: [check-trigger, analyze-changes, create-release]
+    runs-on: ubuntu-latest
+    if: needs.check-trigger.outputs.should_release == 'true' && needs.create-release.result == 'success'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: "📢 Release Notification"
+      run: |
+        echo "🎉 Module Release Notification"
+        echo "=============================="
+        echo ""
+        echo "📦 Module: ${{ github.repository }}"
+        echo "🏷️ Version: ${{ needs.analyze-changes.outputs.new_version }}"
+        echo "🔄 Type: ${{ needs.analyze-changes.outputs.version_type }}"
+        echo "📅 Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+        echo ""
+        if [ "${{ needs.analyze-changes.outputs.has_breaking_changes }}" = "true" ]; then
+          echo "⚠️ BREAKING CHANGES DETECTED"
+          echo "Please review the changelog and migration guide"
+        else
+          echo "✅ Backwards compatible release"
+        fi
+        echo ""
+        echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.analyze-changes.outputs.new_version }}"
+        echo "📝 Changelog: https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md"
+
+    - name: "📋 Update Module Registry (Future)"
+      run: |
+        echo "📋 Future: Update private module registry"
+        echo "This step would update your private Terraform module registry"
+        echo "with the new version information for automated discovery"
+
+        # Future implementation:
+        # - Update private module registry
+        # - Notify downstream consumers
+        # - Update terraform.io registry if public
+        # - Send notifications to relevant teams
+
+  # Stage 5: Pipeline Status and Cleanup
+  pipeline-status:
+    name: "📊 Pipeline Status"
+    runs-on: ubuntu-latest
+    needs: [check-trigger, analyze-changes, validate-module, create-release, post-release]
+    if: always() && needs.check-trigger.outputs.should_release == 'true'
+
+    steps:
+    - name: "📊 Generate Status Summary"
+      run: |
+        echo "## 🏷️ Semantic Versioning Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 Release Trigger" >> $GITHUB_STEP_SUMMARY
+        echo "- **Trigger Event**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Trigger Reason**: ${{ needs.check-trigger.outputs.trigger_reason }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Stage | Status | Details |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 🔍 Trigger Check | ${{ needs.check-trigger.result == 'success' && '✅ Passed' || '❌ Failed' }} | ${{ needs.check-trigger.outputs.trigger_reason }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🔍 Change Analysis | ${{ needs.analyze-changes.result == 'success' && '✅ Passed' || '❌ Failed' }} | Analyzed commits and determined version type |" >> $GITHUB_STEP_SUMMARY
+        echo "| ✅ Module Validation | ${{ needs.validate-module.result == 'success' && '✅ Passed' || '❌ Failed' }} | Validated module structure and security |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🚀 Release Creation | ${{ needs.create-release.result == 'success' && '✅ Passed' || '❌ Failed' }} | Created tag and GitHub release |" >> $GITHUB_STEP_SUMMARY
+        echo "| 📢 Post-Release | ${{ needs.post-release.result == 'success' && '✅ Passed' || needs.post-release.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} | Notifications and registry updates |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [[ "${{ needs.create-release.result }}" == "success" ]]; then
+          echo "**Overall Status**: ✅ **Release Successful**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **New Version**: ${{ needs.analyze-changes.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **Release URL**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.analyze-changes.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**Overall Status**: ❌ **Release Failed**" >> $GITHUB_STEP_SUMMARY
+          echo "Please review the pipeline logs and fix any issues." >> $GITHUB_STEP_SUMMARY
+        fi

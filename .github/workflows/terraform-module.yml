@@ -1,0 +1,620 @@
+name: Terraform Module Test Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - feature/*
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_tests:
+        description: 'Run Terratest integration tests'
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'false'
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+  security-events: write  # Required for CodeQL SARIF upload
+
+jobs:
+  detect-provider:
+    name: Detect Cloud Provider
+    runs-on: ubuntu-latest
+    outputs:
+      provider: ${{ steps.detect.outputs.provider }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect Provider
+        id: detect
+        run: |
+          echo "🔍 Detecting cloud provider from terraform files..."
+
+          # Check terraform/providers.tf or terraform/versions.tf for provider
+          if [ -f "terraform/providers.tf" ]; then
+            if grep -q "azurerm" terraform/providers.tf; then
+              PROVIDER="azure"
+              echo "☁️  Detected Azure provider"
+            elif grep -q "google" terraform/providers.tf; then
+              PROVIDER="gcp"
+              echo "☁️  Detected GCP provider"
+            elif grep -q "aws" terraform/providers.tf; then
+              PROVIDER="aws"
+              echo "☁️  Detected AWS provider"
+            else
+              PROVIDER="multi-cloud"
+              echo "☁️  Multi-cloud or provider-agnostic module"
+            fi
+          elif [ -f "terraform/versions.tf" ]; then
+            if grep -q "azurerm" terraform/versions.tf; then
+              PROVIDER="azure"
+              echo "☁️  Detected Azure provider"
+            elif grep -q "google" terraform/versions.tf; then
+              PROVIDER="gcp"
+              echo "☁️  Detected GCP provider"
+            elif grep -q "aws" terraform/versions.tf; then
+              PROVIDER="aws"
+              echo "☁️  Detected AWS provider"
+            else
+              PROVIDER="multi-cloud"
+              echo "☁️  Multi-cloud or provider-agnostic module"
+            fi
+          else
+            PROVIDER="unknown"
+            echo "⚠️  No providers.tf or versions.tf found in terraform directory"
+          fi
+
+          echo "provider=${PROVIDER}" >> $GITHUB_OUTPUT
+          echo "✅ Provider: ${PROVIDER}"
+
+  tfsec-scan:
+    name: TFSec Security Scan
+    needs: detect-provider
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run TFSec on Module
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: terraform
+          soft_fail: true
+
+  trivy-scan:
+    name: Trivy Security Scan
+    needs: detect-provider
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'config'
+          scan-ref: './terraform'
+          format: 'json'
+          output: 'trivy-results.json'
+          exit-code: '0'
+
+      - name: Display Trivy Results Summary
+        if: always()
+        run: |
+          if [ -f trivy-results.json ]; then
+            echo "## 🔍 Trivy Security Scan Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Count vulnerabilities by severity
+            CRITICAL=$(jq -r '[.Results[]?.Misconfigurations[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo "0")
+            HIGH=$(jq -r '[.Results[]?.Misconfigurations[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo "0")
+            MEDIUM=$(jq -r '[.Results[]?.Misconfigurations[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json 2>/dev/null || echo "0")
+            LOW=$(jq -r '[.Results[]?.Misconfigurations[]? | select(.Severity=="LOW")] | length' trivy-results.json 2>/dev/null || echo "0")
+
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 Medium | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 Low | $LOW |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📦 Full results available in workflow artifacts" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Trivy Results as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-${{ github.run_number }}
+          path: trivy-results.json
+
+  checkov-scan:
+    name: Checkov Security Scan
+    needs: detect-provider
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          soft_fail: true
+          output_format: cli,json
+          output_file_path: console,checkov-results.json
+
+      - name: Upload Checkov Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-results-${{ github.run_number }}
+          path: checkov-results.json
+
+  tflint-scan:
+    name: TFLint Linter Scan
+    needs: detect-provider
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Run TFLint on Terraform Code
+        working-directory: terraform
+        run: |
+          echo "Initializing TFLint..."
+          tflint --init
+          echo "Running TFLint on terraform code..."
+          tflint --format=json --force > ../tflint-module-results.json || true
+          tflint --format=compact || true
+
+      - name: Upload TFLint Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: tflint-results-${{ github.run_number }}
+          path: tflint-module-results.json
+
+  detect-secrets-scan:
+    name: Detect Secrets Scan
+    needs: detect-provider
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run TruffleHog Scan (PR)
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --only-verified
+
+      - name: Run TruffleHog Scan (Push - Last Commit)
+        if: github.event_name == 'push'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.before }}
+          head: ${{ github.sha }}
+          extra_args: --only-verified
+
+      - name: Run TruffleHog Scan (Full Scan for Workflow Dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --only-verified
+
+  terratest:
+    name: Terratest Validation
+    needs: detect-provider
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name != 'workflow_dispatch') ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_tests == 'true')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache-dependency-path: test/go.mod
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: Configure Azure OIDC
+        if: needs.detect-provider.outputs.provider == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure GCP Credentials
+        if: needs.detect-provider.outputs.provider == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GOOGLE_CREDENTIALS }}
+
+      - name: Download Go dependencies
+        working-directory: test
+        run: |
+          echo "📦 Downloading Go dependencies..."
+          go mod download
+          go mod verify
+
+      - name: Run Terratest
+        working-directory: test
+        run: |
+          echo "🧪 Running Terratest on terraform code..."
+          go test -v -timeout 30m 2>&1 | tee terratest-results.txt
+
+      - name: Upload Terratest Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terratest-results-${{ github.run_number }}
+          path: test/terratest-results.txt
+          retention-days: 30
+
+      - name: Terratest Summary
+        if: always()
+        run: |
+          echo "## 🧪 Terratest Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Provider:** ${{ needs.detect-provider.outputs.provider }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Working Directory:** terraform/" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f test/terratest-results.txt ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            tail -n 20 test/terratest-results.txt >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  terraform-deploy:
+    name: Terraform Deploy (${{ needs.detect-provider.outputs.provider }})
+    needs: [detect-provider, tfsec-scan, trivy-scan, checkov-scan, tflint-scan, detect-secrets-scan, terratest]
+    runs-on: ubuntu-latest
+    env:
+      PROVIDER: ${{ needs.detect-provider.outputs.provider }}
+
+    steps:
+      - name: Create GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_IAC_ID }}
+          private-key: ${{ secrets.GH_APP_IAC_PEM }}
+          owner: Unilever-IaC-Core
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure Git to use GitHub App token
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Configure Azure OIDC
+        if: needs.detect-provider.outputs.provider == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure GCP Credentials
+        if: needs.detect-provider.outputs.provider == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GOOGLE_CREDENTIALS }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: Terraform Format Check
+        working-directory: terraform
+        run: |
+          echo "🎨 Checking Terraform formatting..."
+          terraform fmt -check -recursive
+
+      - name: Terraform Init (Azure)
+        if: needs.detect-provider.outputs.provider == 'azure'
+        working-directory: terraform
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_admin_ssh_key: ${{ secrets.VM_ADMIN_SSH_KEY }}
+          TF_VAR_location: "eastus"
+          TF_VAR_vm_size: "Standard_DC1s_v3"
+          TF_VAR_prefix: "helloworld"
+        run: |
+          echo "🔧 Initializing Terraform..."
+          terraform init -input=false -upgrade
+
+      - name: Terraform Init (GCP)
+        if: needs.detect-provider.outputs.provider == 'gcp'
+        working-directory: terraform
+        env:
+          GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          echo "🔧 Initializing Terraform..."
+          terraform init -input=false -upgrade
+
+      - name: Terraform Validate (Azure)
+        if: needs.detect-provider.outputs.provider == 'azure'
+        working-directory: terraform
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_admin_ssh_key: ${{ secrets.VM_ADMIN_SSH_KEY }}
+          TF_VAR_location: "eastus"
+          TF_VAR_vm_size: "Standard_DC1s_v3"
+          TF_VAR_prefix: "helloworld"
+        run: |
+          echo "✔️  Validating Terraform configuration..."
+          terraform validate
+
+      - name: Terraform Validate (GCP)
+        if: needs.detect-provider.outputs.provider == 'gcp'
+        working-directory: terraform
+        env:
+          GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          echo "✔️  Validating Terraform configuration..."
+          terraform validate
+
+      - name: Terraform Plan (Azure)
+        if: needs.detect-provider.outputs.provider == 'azure'
+        id: plan-azure
+        working-directory: terraform
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_admin_ssh_key: ${{ secrets.VM_ADMIN_SSH_KEY }}
+          TF_VAR_location: "eastus"
+          TF_VAR_vm_size: "Standard_DC1s_v3"
+          TF_VAR_prefix: "helloworld"
+        run: |
+          echo "📋 Creating Terraform plan..."
+          terraform plan -input=false -out=tfplan -no-color | tee plan.txt
+          PLAN_EXIT_CODE=$?
+
+          if [ $PLAN_EXIT_CODE -ne 0 ]; then
+            echo "❌ Terraform plan failed with exit code $PLAN_EXIT_CODE"
+            exit $PLAN_EXIT_CODE
+          fi
+
+          echo "✅ Terraform plan completed successfully"
+          echo "PLAN_EXIT_CODE=$PLAN_EXIT_CODE" >> $GITHUB_OUTPUT
+
+      - name: Terraform Plan (GCP)
+        if: needs.detect-provider.outputs.provider == 'gcp'
+        id: plan-gcp
+        working-directory: terraform
+        env:
+          GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          echo "📋 Creating Terraform plan..."
+          terraform plan -input=false -out=tfplan -no-color | tee plan.txt
+          PLAN_EXIT_CODE=$?
+
+          if [ $PLAN_EXIT_CODE -ne 0 ]; then
+            echo "❌ Terraform plan failed with exit code $PLAN_EXIT_CODE"
+            exit $PLAN_EXIT_CODE
+          fi
+
+          echo "✅ Terraform plan completed successfully"
+          echo "PLAN_EXIT_CODE=$PLAN_EXIT_CODE" >> $GITHUB_OUTPUT
+
+      - name: Upload Terraform Plan
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ github.run_number }}
+          path: |
+            terraform/tfplan
+            terraform/plan.txt
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Comment PR with Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const planPath = 'terraform/plan.txt';
+
+            if (fs.existsSync(planPath)) {
+              const plan = fs.readFileSync(planPath, 'utf8');
+              const maxLength = 65000;
+              const planSummary = plan.length > maxLength
+                ? plan.substring(0, maxLength) + '\n\n... _Plan truncated. See artifacts for full plan._'
+                : plan;
+
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 📋 Terraform Plan (${{ env.PROVIDER }})\n\n\`\`\`terraform\n${planSummary}\n\`\`\``
+              });
+            }
+
+      # Terraform Apply steps disabled - only plan is executed for dry-run testing
+      # - name: Terraform Apply (Azure) - Basic Example
+      #   if: |
+      #     needs.detect-provider.outputs.provider == 'azure' &&
+      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
+      #     github.event_name == 'workflow_dispatch'
+      #   working-directory: tftest/basic
+      #   env:
+      #     ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      #   run: |
+      #     echo "🚀 Applying Terraform configuration for basic example..."
+      #     terraform apply -input=false -auto-approve tfplan
+
+      # - name: Terraform Apply (GCP) - Basic Example
+      #   if: |
+      #     needs.detect-provider.outputs.provider == 'gcp' &&
+      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
+      #     github.event_name == 'workflow_dispatch'
+      #   working-directory: tftest/basic
+      #   env:
+      #     GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      #   run: |
+      #     echo "🚀 Applying Terraform configuration for basic example..."
+      #     terraform apply -input=false -auto-approve tfplan
+
+      # - name: Terraform Output (Azure) - Basic Example
+      #   if: |
+      #     needs.detect-provider.outputs.provider == 'azure' &&
+      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
+      #     github.event_name == 'workflow_dispatch'
+      #   working-directory: tftest/basic
+      #   env:
+      #     ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      #   run: |
+      #     echo "📤 Terraform Outputs - Basic:"
+      #     terraform output -json > outputs.json
+      #     terraform output
+
+      # - name: Terraform Output (GCP) - Basic Example
+      #   if: |
+      #     needs.detect-provider.outputs.provider == 'gcp' &&
+      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
+      #     github.event_name == 'workflow_dispatch'
+      #   working-directory: tftest/basic
+      #   env:
+      #     GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+      #   run: |
+      #     echo "📤 Terraform Outputs - Basic:"
+      #     terraform output -json > outputs.json
+      #     terraform output
+
+      # - name: Upload Terraform Outputs - Basic
+      #   if: |
+      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
+      #     github.event_name == 'workflow_dispatch'
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: terraform-outputs-basic-${{ github.run_number }}
+      #     path: tftest/basic/outputs.json
+      #     retention-days: 90
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "## 🎯 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Provider:** ${{ env.PROVIDER }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Working Directory:** terraform/" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deploy Triggered:** ${{ github.event_name == 'workflow_dispatch' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+
+  update-terraform-docs:
+    name: Update Terraform Documentation
+    needs: [detect-provider, terraform-deploy]
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_IAC_ID }}
+          private-key: ${{ secrets.GH_APP_IAC_PEM }}
+          owner: Unilever-IaC-Core
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure Git to use GitHub App token
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Generate Terraform Documentation
+        uses: terraform-docs/gh-actions@v1.2.0
+        with:
+          working-dir: terraform
+          output-file: README.md
+          output-method: inject
+          git-push: false
+          config-file: ../.terraform-docs.yml
+
+      - name: Check for documentation changes
+        id: docs-check
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "📝 No documentation changes detected"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "📝 Documentation changes detected"
+            git diff --stat
+          fi
+
+      - name: Commit and Push Documentation Updates
+        if: steps.docs-check.outputs.has_changes == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add terraform/README.md
+          git commit -m "docs: auto-update terraform documentation [skip ci]"
+          git push
+
+      - name: Documentation Summary
+        if: always()
+        run: |
+          echo "## 📚 Terraform Documentation Update" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Directory:** terraform/" >> $GITHUB_STEP_SUMMARY
+          echo "- **Changes:** ${{ steps.docs-check.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.docs-check.outputs.has_changes }}" == "true" ]; then
+            echo "✅ Documentation has been automatically updated and committed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ No documentation updates required" >> $GITHUB_STEP_SUMMARY
+          fi
