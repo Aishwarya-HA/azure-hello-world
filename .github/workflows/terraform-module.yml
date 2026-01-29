@@ -323,23 +323,23 @@ jobs:
     env:
       PROVIDER: ${{ needs.detect-provider.outputs.provider }}
 
-    steps:
-      - name: Create GitHub App Token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.GH_APP_IAC_ID }}
-          private-key: ${{ secrets.GH_APP_IAC_PEM }}
-          owner: Unilever-IaC-Core
+    # steps:
+      # - name: Create GitHub App Token
+      #   id: app-token
+      #   uses: actions/create-github-app-token@v2
+      #   with:
+      #     app-id: ${{ secrets.GH_APP_IAC_ID }}
+      #     private-key: ${{ secrets.GH_APP_IAC_PEM }}
+      #     owner: Unilever-IaC-Core
 
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.app-token.outputs.token }}
+      # - name: Checkout code
+      #   uses: actions/checkout@v4
+      #   with:
+      #     token: ${{ steps.app-token.outputs.token }}
 
-      - name: Configure Git to use GitHub App token
-        run: |
-          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+      # - name: Configure Git to use GitHub App token
+      #   run: |
+      #     git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
 
       - name: Configure Azure OIDC
         if: needs.detect-provider.outputs.provider == 'azure'
