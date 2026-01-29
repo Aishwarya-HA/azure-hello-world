@@ -540,8 +540,8 @@ jobs:
       - name: Terraform Apply (Azure)
         if: |
           needs.detect-provider.outputs.provider == 'azure' &&
-          (github.event_name == 'workflow_dispatch' && inputs.apply_changes == 'true') ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_changes == 'true') ||
+           (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/vmresize')))
         working-directory: terraform
         env:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -557,8 +557,8 @@ jobs:
       - name: Terraform Apply (GCP)
         if: |
           needs.detect-provider.outputs.provider == 'gcp' &&
-          (github.event_name == 'workflow_dispatch' && inputs.apply_changes == 'true') ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_changes == 'true') ||
+           (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/vmresize')))
         working-directory: terraform
         env:
           GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
@@ -569,8 +569,8 @@ jobs:
       - name: Terraform Output (Azure)
         if: |
           needs.detect-provider.outputs.provider == 'azure' &&
-          ((github.event_name == 'workflow_dispatch' && inputs.apply_changes == 'true') ||
-           (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_changes == 'true') ||
+           (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/vmresize')))
         working-directory: terraform
         env:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -582,8 +582,8 @@ jobs:
       - name: Terraform Output (GCP)
         if: |
           needs.detect-provider.outputs.provider == 'gcp' &&
-          ((github.event_name == 'workflow_dispatch' && inputs.apply_changes == 'true') ||
-           (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_changes == 'true') ||
+           (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/vmresize')))
         working-directory: terraform
         env:
           GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
@@ -594,8 +594,8 @@ jobs:
 
       - name: Upload Terraform Outputs
         if: |
-          (github.event_name == 'workflow_dispatch' && inputs.apply_changes == 'true') ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_changes == 'true') ||
+           (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/vmresize')))
         uses: actions/upload-artifact@v4
         with:
           name: terraform-outputs-${{ github.run_number }}
