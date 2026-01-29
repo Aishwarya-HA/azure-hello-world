@@ -330,6 +330,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
 
       - name: Configure Azure OIDC
         if: needs.detect-provider.outputs.provider == 'azure'
@@ -372,12 +380,24 @@ jobs:
           echo "🎨 Formatting Terraform files..."
           terraform fmt -recursive
 
-      - name: Auto-commit formatting changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: terraform fmt (auto)"
-          file_pattern: "terraform/**/*.tf"
-          skip_dirty_check: true
+      - name: Check for formatting changes
+        id: format-check
+        run: |
+          if [ -n "$(git status --porcelain terraform/)" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "📝 Formatting changes detected"
+            git diff --stat terraform/
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "✅ No formatting changes needed"
+          fi
+
+      - name: Commit formatting changes
+        if: steps.format-check.outputs.has_changes == 'true'
+        run: |
+          git add terraform/**/*.tf
+          git commit -m "chore: terraform fmt (auto) [skip ci]" || exit 0
+          git push || echo "⚠️ Could not push formatting changes (may need manual push)"
 
       - name: Terraform Format Check
         working-directory: terraform
