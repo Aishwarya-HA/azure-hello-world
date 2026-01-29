@@ -254,11 +254,25 @@ jobs:
 
       - name: Configure Azure OIDC
         if: needs.detect-provider.outputs.provider == 'azure'
+        id: azure-oidc-login
+        continue-on-error: true
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login Fallback (Service Principal)
+        if: needs.detect-provider.outputs.provider == 'azure' && steps.azure-oidc-login.outcome == 'failure'
+        run: |
+          echo "OIDC login failed, falling back to service principal authentication..."
+          az logout || true
+          az login --service-principal \
+            --username ${{ secrets.AZURE_CLIENT_ID }} \
+            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
+            --tenant ${{ secrets.AZURE_TENANT_ID }}
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          echo "Azure login successful via service principal"
 
       - name: Configure GCP Credentials
         if: needs.detect-provider.outputs.provider == 'gcp'
@@ -328,11 +342,25 @@ jobs:
 
       - name: Configure Azure OIDC
         if: needs.detect-provider.outputs.provider == 'azure'
+        id: azure-oidc-login-deploy
+        continue-on-error: true
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure Login Fallback (Service Principal)
+        if: needs.detect-provider.outputs.provider == 'azure' && steps.azure-oidc-login-deploy.outcome == 'failure'
+        run: |
+          echo "OIDC login failed, falling back to service principal authentication..."
+          az logout || true
+          az login --service-principal \
+            --username ${{ secrets.AZURE_CLIENT_ID }} \
+            --password ${{ secrets.AZURE_CLIENT_SECRET }} \
+            --tenant ${{ secrets.AZURE_TENANT_ID }}
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          echo "Azure login successful via service principal"
 
       - name: Configure GCP Credentials
         if: needs.detect-provider.outputs.provider == 'gcp'
