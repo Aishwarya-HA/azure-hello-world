@@ -180,8 +180,12 @@ jobs:
           tflint_version: latest
 
       - name: Run TFLint on Terraform Code
-        working-directory: terraform
         run: |
+          if [ ! -d "terraform" ]; then
+            echo "❌ Error: terraform directory not found"
+            exit 1
+          fi
+          cd terraform
           echo "Initializing TFLint..."
           tflint --init
           echo "Running TFLint on terraform code..."
@@ -323,24 +327,10 @@ jobs:
     env:
       PROVIDER: ${{ needs.detect-provider.outputs.provider }}
 
-      # steps:
-      # - name: Create GitHub App Token
-      #   id: app-token
-      #   uses: actions/create-github-app-token@v2
-      #   with:
-      #     app-id: ${{ secrets.GH_APP_IAC_ID }}
-      #     private-key: ${{ secrets.GH_APP_IAC_PEM }}
-      #     owner: Unilever-IaC-Core
-
-      # - name: Checkout code
-      #   uses: actions/checkout@v4
-      #   with:
-      #     token: ${{ steps.app-token.outputs.token }}
-
-      # - name: Configure Git to use GitHub App token
-      #   run: |
-      #     git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Configure Azure OIDC
         if: needs.detect-provider.outputs.provider == 'azure'
         id: azure-oidc-login-deploy
@@ -350,7 +340,6 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           
 
       - name: Azure Login Fallback (Service Principal)
