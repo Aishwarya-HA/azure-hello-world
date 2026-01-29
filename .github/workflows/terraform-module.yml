@@ -529,66 +529,65 @@ jobs:
               });
             }
 
-      # Terraform Apply steps disabled - only plan is executed for dry-run testing
-      # - name: Terraform Apply (Azure) - Basic Example
-      #   if: |
-      #     needs.detect-provider.outputs.provider == 'azure' &&
-      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
-      #     github.event_name == 'workflow_dispatch'
-      #   working-directory: tftest/basic
-      #   env:
-      #     ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      #   run: |
-      #     echo "🚀 Applying Terraform configuration for basic example..."
-      #     terraform apply -input=false -auto-approve tfplan
+      - name: Terraform Apply (Azure)
+        if: |
+          needs.detect-provider.outputs.provider == 'azure' &&
+          github.event_name == 'workflow_dispatch'
+        working-directory: terraform
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_admin_ssh_key: ${{ secrets.VM_ADMIN_SSH_KEY }}
+          TF_VAR_location: "eastus"
+          TF_VAR_vm_size: "Standard_DC1s_v3"
+          TF_VAR_prefix: "helloworld"
+        run: |
+          echo "🚀 Applying Terraform configuration..."
+          terraform apply -input=false -auto-approve tfplan
 
-      # - name: Terraform Apply (GCP) - Basic Example
-      #   if: |
-      #     needs.detect-provider.outputs.provider == 'gcp' &&
-      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
-      #     github.event_name == 'workflow_dispatch'
-      #   working-directory: tftest/basic
-      #   env:
-      #     GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-      #   run: |
-      #     echo "🚀 Applying Terraform configuration for basic example..."
-      #     terraform apply -input=false -auto-approve tfplan
+      - name: Terraform Apply (GCP)
+        if: |
+          needs.detect-provider.outputs.provider == 'gcp' &&
+          github.event_name == 'workflow_dispatch'
+        working-directory: terraform
+        env:
+          GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          echo "🚀 Applying Terraform configuration..."
+          terraform apply -input=false -auto-approve tfplan
 
-      # - name: Terraform Output (Azure) - Basic Example
-      #   if: |
-      #     needs.detect-provider.outputs.provider == 'azure' &&
-      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
-      #     github.event_name == 'workflow_dispatch'
-      #   working-directory: tftest/basic
-      #   env:
-      #     ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      #   run: |
-      #     echo "📤 Terraform Outputs - Basic:"
-      #     terraform output -json > outputs.json
-      #     terraform output
+      - name: Terraform Output (Azure)
+        if: |
+          needs.detect-provider.outputs.provider == 'azure' &&
+          github.event_name == 'workflow_dispatch'
+        working-directory: terraform
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          echo "📤 Terraform Outputs:"
+          terraform output -json > outputs.json
+          terraform output
 
-      # - name: Terraform Output (GCP) - Basic Example
-      #   if: |
-      #     needs.detect-provider.outputs.provider == 'gcp' &&
-      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
-      #     github.event_name == 'workflow_dispatch'
-      #   working-directory: tftest/basic
-      #   env:
-      #     GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-      #   run: |
-      #     echo "📤 Terraform Outputs - Basic:"
-      #     terraform output -json > outputs.json
-      #     terraform output
+      - name: Terraform Output (GCP)
+        if: |
+          needs.detect-provider.outputs.provider == 'gcp' &&
+          github.event_name == 'workflow_dispatch'
+        working-directory: terraform
+        env:
+          GOOGLE_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          echo "📤 Terraform Outputs:"
+          terraform output -json > outputs.json
+          terraform output
 
-      # - name: Upload Terraform Outputs - Basic
-      #   if: |
-      #     contains(needs.detect-provider.outputs.examples, 'basic') &&
-      #     github.event_name == 'workflow_dispatch'
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: terraform-outputs-basic-${{ github.run_number }}
-      #     path: tftest/basic/outputs.json
-      #     retention-days: 90
+      - name: Upload Terraform Outputs
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs-${{ github.run_number }}
+          path: terraform/outputs.json
+          retention-days: 90
+          if-no-files-found: ignore
 
       - name: Deployment Summary
         if: always()
