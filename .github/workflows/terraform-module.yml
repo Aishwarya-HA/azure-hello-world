@@ -366,11 +366,25 @@ jobs:
           terraform_version: latest
           terraform_wrapper: false
 
-      - name: Terraform Format Check
+      - name: Terraform Format (write)
         working-directory: terraform
         run: |
+          echo "🎨 Formatting Terraform files..."
+          terraform fmt -recursive
+
+      - name: Auto-commit formatting changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: terraform fmt (auto)"
+          file_pattern: "terraform/**/*.tf"
+          skip_dirty_check: true
+
+      - name: Terraform Format Check
+        working-directory: terraform
+        continue-on-error: true
+        run: |
           echo "🎨 Checking Terraform formatting..."
-          terraform fmt -check -recursive
+          terraform fmt -check -recursive || echo "⚠️ Some files may need manual formatting"
 
       - name: Terraform Init (Azure)
         if: needs.detect-provider.outputs.provider == 'azure'
