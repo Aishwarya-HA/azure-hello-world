@@ -31,7 +31,7 @@ jobs:
       # Region + size: you picked South India earlier; if capacity is tight,
       # you can switch to Central India without touching code elsewhere.
       TF_VAR_location:   "eastus"
-      TF_VAR_vm_size:   "Standard_D2s_v3"
+      TF_VAR_vm_size:   "Standard_DC1s_v3"
       TF_VAR_prefix:   "helloworld"
 
     steps:
