@@ -56,3 +56,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# VM name (root variable)
+variable "vm_name" {
+  description = "Name of the Linux VM resource"
+  type        = string
+}
