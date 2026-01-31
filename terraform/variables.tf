@@ -57,8 +57,11 @@ variable "tags" {
   default     = {}
 }
 
-# VM name (root variable)
+# VM name (root variable) — OPTIONAL now
+# If left empty, main.tf will compute <prefix>-vm
 variable "vm_name" {
-  description = "Name of the Linux VM resource"
+  description = "Optional explicit VM name; if empty, defaults to <prefix>-vm"
   type        = string
+  default     = ""
 }
+
