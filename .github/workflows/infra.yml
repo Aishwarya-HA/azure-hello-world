@@ -1,40 +1,39 @@
-name: terraform-azure
+name: IaC - Azure VM Hello World
 
 on:
   push:
     branches: ["main"]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/infra.yml"
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/infra.yml"
   workflow_dispatch:
-    inputs:
-      vm_size:
-        description: "New VM size for manual resize (e.g., Standard_D2s_v5)"
-        required: false
-        type: string
 
 permissions:
   id-token: write
   contents: read
 
-concurrency:
-  group: "terraform-azure-${{ github.ref }}"
-  cancel-in-progress: false
+env:
+  # Azure OIDC login
+  ARM_USE_OIDC: true
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+
+  # Terraform settings
+  TF_WORKING_DIR: ./terraform
+  TF_LOG: INFO
+  TF_LOG_LEVEL: INFO
+
+  # Name prefix (kept as a secret, as you had)
+  
 
 jobs:
-  plan_apply:
-    name: Plan & Apply (single run)
+  plan-apply:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./terraform
-
-    env:
-      TF_IN_AUTOMATION: "true"
-      TF_INPUT: "false"
-
-      # Optional defaults; can be overridden by prod.tfvars or workflow input
-      TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      TF_VAR_admin_username:  "azureuser"
-      TF_VAR_vm_size:         "Standard_D2ls_v5"
-      TF_VAR_prefix:          "helloworld"
 
     steps:
       - name: Checkout
@@ -52,56 +51,57 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      - name: Terraform Init (Azure remote backend)
+      - name: Terraform Init (upgrade providers)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -upgrade
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
         env:
-          # Backend/Provider auth via OIDC
-          ARM_USE_OIDC: "true"
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # Required TF variables
+          TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
+          TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
+          
+          # NOTE: We intentionally do NOT set TF_VAR_location or TF_VAR_vm_size here.
+          # Terraform will use defaults from variables.tf (location="eastus", vm_size="Standard_D2s_v5").
         run: |
-          terraform init \
-            -backend-config="resource_group_name=${{ vars.TF_BACKEND_RG }}" \
-            -backend-config="storage_account_name=${{ vars.TF_BACKEND_SA }}" \
-            -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
-            -backend-config="key=${{ vars.TF_BACKEND_KEY }}"
-
-      # ===== Normal CI path =====
-      - name: Terraform fmt + validate
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          terraform fmt -check -diff -recursive
+          set -euo pipefail
+          terraform version
           terraform validate
+          terraform plan -no-color -input=false -out=tfplan | tee plan.out
+          test -s tfplan
 
-      - name: Terraform plan (CI)
-        if: github.event_name != 'workflow_dispatch'
-        run: terraform plan -var-file="prod.tfvars" -out=tfplan
-
-      - name: Terraform apply (push to main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: terraform apply -auto-approve tfplan
-
-      - name: Read outputs (CI)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        id: tfout_ci
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
+          TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
+         
         run: |
-          echo "RG=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
-          echo "VM=$(terraform output -raw vm_name)" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          terraform apply -no-color -input=false -parallelism=1 -auto-approve tfplan | tee apply.out
 
-      - name: Ensure VM is running (CI)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Show Outputs
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          az vm start -g "${{ steps.tfout_ci.outputs.RG }}" -n "${{ steps.tfout_ci.outputs.VM }}" || true
-          az vm wait --started -g "${{ steps.tfout_ci.outputs.RG }}" -n "${{ steps.tfout_ci.outputs.VM }}"
-
-      # ===== Manual resize path =====
-      - name: Validate size availability (manual)
-        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
-        run: |
-          REGION=$(terraform output -raw location || echo "centralindia")
-          echo "Checking SKU availability in region: $REGION"
-          if ! az vm list-sizes -l "$REGION" --query "[].name" -o tsv | grep -Fx "${{ inputs.vm_size }}"; then
-            echo "Requested size not available in $REGION: ${{ inputs.vm_size }}"
-            exit 1
+          echo "### Terraform Outputs" >> $GITHUB_STEP_SUMMARY
+          terraform output >> $GITHUB_STEP_SUMMARY || true
+          if terraform output -raw web_url >/dev/null 2>&1; then
+            echo "Open your site: $(terraform output -raw web_url)" >> $GITHUB_STEP_SUMMARY
           fi
 
+      - name: Upload TF logs (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-logs
+          path: |
+            terraform/plan.out
+            terraform/apply.out
