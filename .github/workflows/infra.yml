@@ -4,13 +4,18 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      vm_size:
+        description: "New VM size for manual resize (e.g., Standard_D2s_v5)"
+        required: false
+        type: string
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
 
 concurrency:
-  group: terraform-azure-${{ github.ref }}
+  group: "terraform-azure-${{ github.ref }}"
   cancel-in-progress: false
 
 jobs:
@@ -20,19 +25,17 @@ jobs:
     defaults:
       run:
         working-directory: ./terraform
+
     env:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
 
-      # TF variables (adjust if needed)
+      # You were already exporting some TF_VARs—keep what you need.
+      # These can be overridden by values in prod.tfvars or workflow input.
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      TF_VAR_admin_ssh_key:  ${{ secrets.VM_ADMIN_SSH_KEY }}
-
-      # Region + size: you picked South India earlier; if capacity is tight,
-      # you can switch to Central India without touching code elsewhere.
-      TF_VAR_location:   "eastus"
-      TF_VAR_vm_size:   "Standard_DC1s_v3"
-      TF_VAR_prefix:   "helloworld"
+      TF_VAR_admin_username:  "azureuser"
+      TF_VAR_vm_size:         "Standard_D2ls_v5"
+      TF_VAR_prefix:          "helloworld"
 
     steps:
       - name: Checkout
@@ -48,37 +51,81 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: false
+          terraform_version: 1.7.5
 
-      # Formatting (kept but safe)
-      - name: Terraform fmt (write)
-        run: terraform fmt -recursive
+      - name: Terraform Init (Azure remote backend)
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TF_BACKEND_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TF_BACKEND_SA }}" \
+            -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY }}"
 
-      - name: Auto-commit formatting changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: terraform fmt (auto)"
-          file_pattern: "terraform/**/*.tf"
+      # ===== Normal CI path (push to main / PR) =====
+      - name: Terraform fmt + validate
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          terraform fmt -check -diff -recursive
+          terraform validate
 
-      - name: Terraform fmt (check)
-        run: terraform fmt -check -diff -recursive
+      - name: Terraform plan (CI)
+        if: github.event_name != 'workflow_dispatch'
+        run: terraform plan -var-file="prod.tfvars" -out=tfplan
 
-      # Plan & apply (single run, no -target)
-      - name: Terraform init
-        run: terraform init -upgrade
-
-      - name: Terraform plan
-        run: terraform plan -out=tfplan -no-color && terraform show -no-color tfplan > plan.txt
-
-      - name: Upload plan artifact
+      - name: Upload plan artifact (CI)
+        if: github.event_name != 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan-${{ github.run_id }}
-          path: |
-            ${{ github.workspace }}/terraform/tfplan
-            ${{ github.workspace }}/terraform/plan.txt
+          name: tfplan
+          path: tfplan
           if-no-files-found: error
           retention-days: 7
 
-      - name: Terraform apply
+      - name: Terraform apply (push to main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve tfplan
+
+      - name: Read outputs (CI)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: tfout_ci
+        run: |
+          echo "RG=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+          echo "VM=$(terraform output -raw vm_name)" >> $GITHUB_OUTPUT
+
+      - name: Ensure VM is running (CI)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          az vm start -g "${{ steps.tfout_ci.outputs.RG }}" -n "${{ steps.tfout_ci.outputs.VM }}" || true
+          az vm wait --started -g "${{ steps.tfout_ci.outputs.RG }}" -n "${{ steps.tfout_ci.outputs.VM }}"
+
+      # ===== Manual resize path (workflow_dispatch) =====
+      - name: Validate size availability (manual)
+        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
+        run: |
+          REGION=$(terraform output -raw location || echo "centralindia")
+          echo "Checking SKU availability in region: $REGION"
+          if ! az vm list-sizes -l "$REGION" --query "[].name" -o tsv | grep -Fx "${{ inputs.vm_size }}"; then
+            echo "Requested size not available in $REGION: ${{ inputs.vm_size }}"
+            exit 1
+          fi
+
+      - name: Terraform plan (manual resize)
+        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
+        run: terraform plan -var-file="prod.tfvars" -var="vm_size=${{ inputs.vm_size }}" -out=tfplan
+
+      - name: Terraform apply (manual resize)
+        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
+        run: terraform apply -auto-approve tfplan
+
+      - name: Read outputs (manual)
+        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
+        id: tfout_manual
+        run: |
+          echo "RG=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+          echo "VM=$(terraform output -raw vm_name)" >> $GITHUB_OUTPUT
+
+      - name: Start VM and wait (manual)
+        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
+        run: |
+          az vm start -g "${{ steps.tfout_manual.outputs.RG }}" -n "${{ steps.tfout_manual.outputs.VM }}" || true
+          az vm wait --started -g "${{ steps.tfout_manual.outputs.RG }}" -n "${{ steps.tfout_manual.outputs.VM }}"
