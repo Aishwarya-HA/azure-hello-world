@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   plan_apply:
-    name: Plan & Apply (single run, no -target)
+    name: Plan & Apply (single run)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -30,8 +30,7 @@ jobs:
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
 
-      # You were already exporting some TF_VARs—keep what you need.
-      # These can be overridden by values in prod.tfvars or workflow input.
+      # Optional defaults; can be overridden by prod.tfvars or workflow input
       TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       TF_VAR_admin_username:  "azureuser"
       TF_VAR_vm_size:         "Standard_D2ls_v5"
@@ -54,6 +53,12 @@ jobs:
           terraform_version: 1.7.5
 
       - name: Terraform Init (Azure remote backend)
+        env:
+          # Backend/Provider auth via OIDC
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           terraform init \
             -backend-config="resource_group_name=${{ vars.TF_BACKEND_RG }}" \
@@ -61,7 +66,7 @@ jobs:
             -backend-config="container_name=${{ vars.TF_BACKEND_CONTAINER }}" \
             -backend-config="key=${{ vars.TF_BACKEND_KEY }}"
 
-      # ===== Normal CI path (push to main / PR) =====
+      # ===== Normal CI path =====
       - name: Terraform fmt + validate
         if: github.event_name != 'workflow_dispatch'
         run: |
@@ -71,15 +76,6 @@ jobs:
       - name: Terraform plan (CI)
         if: github.event_name != 'workflow_dispatch'
         run: terraform plan -var-file="prod.tfvars" -out=tfplan
-
-      - name: Upload plan artifact (CI)
-        if: github.event_name != 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan
-          path: tfplan
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Terraform apply (push to main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -98,7 +94,7 @@ jobs:
           az vm start -g "${{ steps.tfout_ci.outputs.RG }}" -n "${{ steps.tfout_ci.outputs.VM }}" || true
           az vm wait --started -g "${{ steps.tfout_ci.outputs.RG }}" -n "${{ steps.tfout_ci.outputs.VM }}"
 
-      # ===== Manual resize path (workflow_dispatch) =====
+      # ===== Manual resize path =====
       - name: Validate size availability (manual)
         if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
         run: |
@@ -109,23 +105,3 @@ jobs:
             exit 1
           fi
 
-      - name: Terraform plan (manual resize)
-        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
-        run: terraform plan -var-file="prod.tfvars" -var="vm_size=${{ inputs.vm_size }}" -out=tfplan
-
-      - name: Terraform apply (manual resize)
-        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
-        run: terraform apply -auto-approve tfplan
-
-      - name: Read outputs (manual)
-        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
-        id: tfout_manual
-        run: |
-          echo "RG=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
-          echo "VM=$(terraform output -raw vm_name)" >> $GITHUB_OUTPUT
-
-      - name: Start VM and wait (manual)
-        if: github.event_name == 'workflow_dispatch' && inputs.vm_size != ''
-        run: |
-          az vm start -g "${{ steps.tfout_manual.outputs.RG }}" -n "${{ steps.tfout_manual.outputs.VM }}" || true
-          az vm wait --started -g "${{ steps.tfout_manual.outputs.RG }}" -n "${{ steps.tfout_manual.outputs.VM }}"
