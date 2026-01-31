@@ -1,3 +1,4 @@
+
 terraform {
   required_version = ">= 1.6.0"
 
@@ -7,8 +8,7 @@ terraform {
     resource_group_name  = "tfstate-rg"
     storage_account_name = "tfstatestoreaish123"
     container_name       = "terraform-state"     # must match container name exactly
-     key                  = "azure-hello-world.tfstate"
-   
+    key                  = "azure-hello-world.tfstate"
     # -------------------------------------------
   }
 
