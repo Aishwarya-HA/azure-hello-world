@@ -2,7 +2,7 @@ name: IaC - Azure VM hello world
 
 on:
   push:
-    branches: ['main']   # change if your default branch is different
+    branches: ['main']
     paths:
       - '*.tf'
       - 'modules/**'
@@ -19,25 +19,14 @@ on:
       - '.github/workflows/infra.yml'
 
 permissions:
-  id-token: write       # Required for Azure OIDC
+  id-token: write          # OIDC to Azure
   contents: read
 
 env:
-  # Terraform
-  TF_WORKDIR: .         # repo root (your main.tf & terraform.tfvars are here)
+  TF_WORKDIR: .            # repo root (your main.tf is here)
   TF_VERSION: '1.7.5'
 
-  # Defaults used if we auto-create terraform.tfvars
-  DEFAULT_PREFIX: demo
-  DEFAULT_LOCATION: eastus
-  DEFAULT_ADDRESS_SPACE: '["10.0.0.0/16"]'   # keep as JSON-like string
-  DEFAULT_SUBNET_PREFIX: 10.0.1.0/24
-  DEFAULT_ADMIN_USERNAME: azureuser
-  DEFAULT_VM_SIZE: Standard_DC1s_v3
-  DEFAULT_ENVIRONMENT: prod
-  DEFAULT_PROJECT: azure-wrapper
-
-  # Azure (set these as GitHub repo/org secrets)
+  # Azure IDs (store as GitHub secrets)
   AZURE_TENANT_ID:        ${{ secrets.AZURE_TENANT_ID }}
   AZURE_SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   AZURE_CLIENT_ID:        ${{ secrets.AZURE_CLIENT_ID }}
@@ -47,11 +36,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Azure login via OIDC (no client secret needed)
+      # Login to Azure using federated identity (OIDC)
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -68,37 +56,51 @@ jobs:
           echo "ARM_SUBSCRIPTION_ID=${{ env.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
           echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
 
-      # Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # Init
+      # Export all required module variables without needing a tfvars file
+      - name: Export TF_VAR_* (no tfvars file needed)
+        shell: bash
+        run: |
+          # ---- required variables your root expects ----
+          echo 'TF_VAR_prefix=demo' >> "$GITHUB_ENV"
+          echo 'TF_VAR_location=eastus' >> "$GITHUB_ENV"
+          echo 'TF_VAR_address_space=["10.0.0.0/16"]' >> "$GITHUB_ENV"
+          echo 'TF_VAR_subnet_prefix=10.0.1.0/24' >> "$GITHUB_ENV"
+          echo 'TF_VAR_admin_username=azureuser' >> "$GITHUB_ENV"
+          echo 'TF_VAR_vm_size=Standard_DC1s_v3' >> "$GITHUB_ENV"
+          echo 'TF_VAR_tags={ environment = "prod", project = "azure-wrapper" }' >> "$GITHUB_ENV"
+
+          # ---- SSH public key from secret (required) ----
+          if [ -z "${{ secrets.SSH_PUBLIC_KEY }}" ]; then
+            echo "❌ Missing repo secret SSH_PUBLIC_KEY (public key). Add it in Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo 'TF_VAR_ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}' >> "$GITHUB_ENV"
+
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform init -upgrade
 
-      # Validate
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform validate
 
-      # (Optional) Show files so we can confirm terraform.tfvars is in the root
-      - name: List TF working directory
+      - name: Terraform Plan
         working-directory: ${{ env.TF_WORKDIR }}
-        run: |
-          pwd
-          ls -la
+        run: terraform plan -no-color -input=false -out=plan.out
 
-      # Ensure terraform.tfvars exists:
-      #  - If present, keep it
-      #  - Otherwise create from defaults + SSH_PUBLIC_KEY secret
-      - name: Ensure terraform.tfvars exists (or create)
+      - name: Upload TF plan (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKDIR }}/plan.out
+
+      - name: Terraform Apply
+        if: ${{ github.ref == 'refs/heads/main' }}
         working-directory: ${{ env.TF_WORKDIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -f "terraform.tfvars" ]]; then
-            echo "✅ terraform.tfvars found"
-            # Print without exposing the key
+        run: terraform apply -no-color -input=false plan.out
