@@ -2,7 +2,7 @@ name: IaC - Azure VM hello world
 
 on:
   push:
-    branches: ['main']
+    branches: ['main']           # Change if you use a different default branch
     paths:
       - 'terraform/**'
       - '.github/workflows/infra.yml'
@@ -13,34 +13,43 @@ on:
       - '.github/workflows/infra.yml'
 
 permissions:
-  id-token: write      # for OIDC
+  id-token: write    # Required for OIDC to Azure
   contents: read
 
 env:
-  # ----- single source of truth for paths -----
-  TF_WORKDIR: terraform
-  TF_VERSION: '1.7.5'
+  TF_WORKDIR: terraform           # <-- path where your main.tf lives
+  TF_VERSION: '1.7.5'             # Pin Terraform version for reproducibility
 
-  # ----- Azure OIDC login (fill your values/secrets) -----
-  AZURE_TENANT_ID:    ${{ secrets.AZURE_TENANT_ID }}
-  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  AZURE_CLIENT_ID:    ${{ secrets.AZURE_CLIENT_ID }}
+  # Azure IDs (store these as GitHub secrets in the repo or org)
+  AZURE_TENANT_ID:        ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_CLIENT_ID:        ${{ secrets.AZURE_CLIENT_ID }}
 
 jobs:
   plan-apply:
     runs-on: ubuntu-latest
+
     steps:
       # -------- Checkout --------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -------- Azure login (OIDC) --------
+      # -------- Azure login via OIDC (no client secret needed) --------
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          client-id:       ${{ env.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      # -------- Make OIDC creds visible to Terraform provider --------
+      # AzureRM provider will read these automatically.
+      - name: Export ARM_* env for Terraform (OIDC)
+        run: |
+          echo "ARM_CLIENT_ID=${{ env.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ env.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ env.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
 
       # -------- Setup Terraform --------
       - name: Setup Terraform
@@ -58,13 +67,12 @@ jobs:
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform validate
 
-      # -------- Terraform Plan (write a real file) --------
+      # -------- Terraform Plan (writes plan.out) --------
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKDIR }}
-        # -no-color makes logs clean; -out writes the plan file deterministically
         run: terraform plan -no-color -input=false -out=plan.out
 
-      # -------- Upload the plan as artifact (optional) --------
+      # -------- Upload the plan artifact (optional but useful) --------
       - name: Upload TF plan (optional)
         if: always()
         uses: actions/upload-artifact@v4
@@ -72,8 +80,7 @@ jobs:
           name: tfplan
           path: ${{ env.TF_WORKDIR }}/plan.out
 
-      # -------- Terraform Apply (uses the plan written above) --------
-      # Gate this to main; remove the if to always apply after plan
+      # -------- Terraform Apply (gated to main) --------
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.TF_WORKDIR }}
