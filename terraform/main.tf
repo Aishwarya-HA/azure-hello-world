@@ -130,7 +130,9 @@ module "web_vm" {
   admin_username = var.admin_username
 
   # SSH key — required when password auth is disabled
-  admin_ssh_key = local.effective_admin_ssh_key
+  locals {
+  effective_admin_ssh_key = var.ssh_public_key
+}
 
   # cloud-init: base64 string or null
   custom_data_b64 = local.custom_data_b64
