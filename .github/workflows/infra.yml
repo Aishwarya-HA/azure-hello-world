@@ -69,12 +69,30 @@ jobs:
       # -------- (optional) List working dir to confirm tfvars presence --------
       - name: List TF working directory
         working-directory: ${{ env.TF_WORKDIR }}
-        run: ls -la
+        run: |
+          pwd
+          ls -la
 
-      # -------- Plan (explicitly load terraform.tfvars) --------
+      # -------- Detect which tfvars file to use --------
+      - name: Select tfvars file
+        id: tfvars
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: |
+          if [ -f "terraform.tfvars" ]; then
+            echo "Using terraform.tfvars"
+            echo "file=terraform.tfvars" >> $GITHUB_OUTPUT
+          elif [ -f ".tfvars" ]; then
+            echo "Using .tfvars"
+            echo "file=.tfvars" >> $GITHUB_OUTPUT
+          else
+            echo "❌ No tfvars file found in $(pwd). Create terraform.tfvars or .tfvars."
+            exit 1
+          fi
+
+      # -------- Plan (explicitly load the detected tfvars) --------
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform plan -no-color -input=false -var-file=terraform.tfvars -out=plan.out
+        run: terraform plan -no-color -input=false -var-file=${{ steps.tfvars.outputs.file }} -out=plan.out
 
       # -------- Upload the plan artifact (optional but useful) --------
       - name: Upload TF plan (optional)
