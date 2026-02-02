@@ -2,12 +2,6 @@
 # Root variables.tf (updated)
 #############################################
 
-# Subscription / Region (subscription_id optional if using OIDC + ARM_* envs)
-variable "subscription_id" {
-  description = "Azure subscription ID where resources will be deployed."
-  type        = string
-}
-
 variable "location" {
   description = "Azure region for all resources."
   type        = string
