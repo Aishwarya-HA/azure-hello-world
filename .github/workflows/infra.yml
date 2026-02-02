@@ -8,7 +8,6 @@ on:
       - 'modules/**'
       - 'cloud-init.yaml'
       - 'terraform.tfvars'
-      - '.tfvars'
       - '.github/workflows/infra.yml'
   pull_request:
     branches: ['main']
@@ -17,7 +16,6 @@ on:
       - 'modules/**'
       - 'cloud-init.yaml'
       - 'terraform.tfvars'
-      - '.tfvars'
       - '.github/workflows/infra.yml'
 
 permissions:
@@ -25,10 +23,10 @@ permissions:
   contents: read
 
 env:
-  TF_WORKDIR: .             # <-- repo root (where your main.tf & terraform.tfvars live)
+  TF_WORKDIR: .             # <-- repo root (your main.tf & terraform.tfvars live here)
   TF_VERSION: '1.7.5'
 
-  # Azure IDs (store as GitHub repo/org secrets)
+  # Azure IDs (store these as GitHub repo/org secrets)
   AZURE_TENANT_ID:        ${{ secrets.AZURE_TENANT_ID }}
   AZURE_SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   AZURE_CLIENT_ID:        ${{ secrets.AZURE_CLIENT_ID }}
@@ -81,17 +79,32 @@ jobs:
           pwd
           ls -la
 
-      # Detect which tfvars file to use (terraform.tfvars or .tfvars)
-      - name: Select tfvars file
-        id: tfvars
+      # Verify tfvars exists (simple & robust)
+      - name: Verify terraform.tfvars exists
         working-directory: ${{ env.TF_WORKDIR }}
         shell: bash
         run: |
-          if [ -f "terraform.tfvars" ]; then
-            echo "Using terraform.tfvars"
-            echo "file=terraform.tfvars" >> $GITHUB_OUTPUT
-          elif [ -f ".tfvars" ]; then
-            echo "Using .tfvars"
-            echo "file=.tfvars" >> $GITHUB_OUTPUT
-          else
-            echo "❌ No tfvars file found in $(pwd). Create terraform.tfvars or .tfvars."
+          if [[ ! -f "terraform.tfvars" ]]; then
+            echo "❌ terraform.tfvars not found in $(pwd). Create it next to main.tf."
+            exit 1
+          fi
+          echo "✅ terraform.tfvars found"
+
+      # Plan (explicitly load terraform.tfvars)
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform plan -no-color -input=false -var-file=terraform.tfvars -out=plan.out
+
+      # Upload plan (optional)
+      - name: Upload TF plan (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKDIR }}/plan.out
+
+      # Apply (only on main)
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform apply -no-color -input=false plan.out
