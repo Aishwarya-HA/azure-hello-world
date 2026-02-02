@@ -37,11 +37,11 @@ variable "admin_username" {
 # SSH PUBLIC key (contents of your .pub file)
 # - Optional here; root main.tf will fall back to ~/.ssh/azure_vm.pub if not provided.
 # - In CI, provide via TF_VAR_admin_ssh_key.
-variable "admin_ssh_key" {
-  description = "SSH PUBLIC key for the admin user (contents of the .pub file)."
+variable "ssh_public_key" {
   type        = string
-  sensitive   = true
+  description = "SSH public key used for VM access"
 }
+
 
 # VM sizing (resize knob)
 variable "vm_size" {
