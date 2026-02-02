@@ -2,25 +2,33 @@ name: IaC - Azure VM hello world
 
 on:
   push:
-    branches: ['main']                    # change if you use a different default branch
+    branches: ['main']   # change if you use a different default branch
     paths:
-      - 'terraform/**'
+      - '*.tf'
+      - 'modules/**'
+      - 'cloud-init.yaml'
+      - 'terraform.tfvars'
+      - '.tfvars'
       - '.github/workflows/infra.yml'
   pull_request:
     branches: ['main']
     paths:
-      - 'terraform/**'
+      - '*.tf'
+      - 'modules/**'
+      - 'cloud-init.yaml'
+      - 'terraform.tfvars'
+      - '.tfvars'
       - '.github/workflows/infra.yml'
 
 permissions:
-  id-token: write                         # Required for OIDC to Azure
+  id-token: write           # OIDC to Azure
   contents: read
 
 env:
-  TF_WORKDIR: terraform                   # <-- folder where main.tf lives
-  TF_VERSION: '1.7.5'                     # Pin Terraform version for reproducibility
+  TF_WORKDIR: .             # <-- repo root (where your main.tf & terraform.tfvars live)
+  TF_VERSION: '1.7.5'
 
-  # Azure IDs (store these three as GitHub Secrets)
+  # Azure IDs (store as GitHub repo/org secrets)
   AZURE_TENANT_ID:        ${{ secrets.AZURE_TENANT_ID }}
   AZURE_SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   AZURE_CLIENT_ID:        ${{ secrets.AZURE_CLIENT_ID }}
@@ -30,11 +38,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # -------- Checkout --------
+      # Checkout
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -------- Azure login via OIDC (no client secret needed) --------
+      # Azure login via OIDC
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -42,7 +50,7 @@ jobs:
           tenant-id:       ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      # -------- Make OIDC creds visible to Terraform provider --------
+      # Make OIDC creds visible to Terraform provider
       - name: Export ARM_* env for Terraform (OIDC)
         run: |
           echo "ARM_CLIENT_ID=${{ env.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
@@ -50,33 +58,34 @@ jobs:
           echo "ARM_SUBSCRIPTION_ID=${{ env.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
           echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
 
-      # -------- Setup Terraform --------
+      # Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # -------- Init --------
+      # Init
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform init -upgrade
 
-      # -------- Validate --------
+      # Validate
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform validate
 
-      # -------- (optional) List working dir to confirm tfvars presence --------
+      # (Optional) Show files so we can confirm terraform.tfvars is in the root
       - name: List TF working directory
         working-directory: ${{ env.TF_WORKDIR }}
         run: |
           pwd
           ls -la
 
-      # -------- Detect which tfvars file to use --------
+      # Detect which tfvars file to use (terraform.tfvars or .tfvars)
       - name: Select tfvars file
         id: tfvars
         working-directory: ${{ env.TF_WORKDIR }}
+        shell: bash
         run: |
           if [ -f "terraform.tfvars" ]; then
             echo "Using terraform.tfvars"
@@ -86,24 +95,3 @@ jobs:
             echo "file=.tfvars" >> $GITHUB_OUTPUT
           else
             echo "❌ No tfvars file found in $(pwd). Create terraform.tfvars or .tfvars."
-            exit 1
-          fi
-
-      # -------- Plan (explicitly load the detected tfvars) --------
-      - name: Terraform Plan
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform plan -no-color -input=false -var-file=${{ steps.tfvars.outputs.file }} -out=plan.out
-
-      # -------- Upload the plan artifact (optional but useful) --------
-      - name: Upload TF plan (optional)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan
-          path: ${{ env.TF_WORKDIR }}/plan.out
-
-      # -------- Apply (only on main) --------
-      - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform apply -no-color -input=false plan.out
