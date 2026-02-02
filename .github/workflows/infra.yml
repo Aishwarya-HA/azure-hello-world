@@ -2,7 +2,7 @@ name: IaC - Azure VM hello world
 
 on:
   push:
-    branches: ['main']           # Change if you use a different default branch
+    branches: ['main']                    # change if you use a different default branch
     paths:
       - 'terraform/**'
       - '.github/workflows/infra.yml'
@@ -13,14 +13,14 @@ on:
       - '.github/workflows/infra.yml'
 
 permissions:
-  id-token: write    # Required for OIDC to Azure
+  id-token: write                         # Required for OIDC to Azure
   contents: read
 
 env:
-  TF_WORKDIR: terraform           # <-- path where your main.tf lives
-  TF_VERSION: '1.7.5'             # Pin Terraform version for reproducibility
+  TF_WORKDIR: terraform                   # <-- folder where main.tf lives
+  TF_VERSION: '1.7.5'                     # Pin Terraform version for reproducibility
 
-  # Azure IDs (store these as GitHub secrets in the repo or org)
+  # Azure IDs (store these three as GitHub Secrets)
   AZURE_TENANT_ID:        ${{ secrets.AZURE_TENANT_ID }}
   AZURE_SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   AZURE_CLIENT_ID:        ${{ secrets.AZURE_CLIENT_ID }}
@@ -28,13 +28,12 @@ env:
 jobs:
   plan-apply:
     runs-on: ubuntu-latest
-
     steps:
       # -------- Checkout --------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -------- Azure login via OIDC (no client secret needed) --------
+      # -------- Azure login via OIDC --------
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -42,8 +41,7 @@ jobs:
           tenant-id:       ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      # -------- Make OIDC creds visible to Terraform provider --------
-      # AzureRM provider will read these automatically.
+      # -------- Export ARM_* env for the Terraform provider --------
       - name: Export ARM_* env for Terraform (OIDC)
         run: |
           echo "ARM_CLIENT_ID=${{ env.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
@@ -57,22 +55,22 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # -------- Terraform Init --------
+      # -------- Init --------
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform init -upgrade
 
-      # -------- Terraform Validate --------
+      # -------- Validate --------
       - name: Terraform Validate
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform validate
 
-      # -------- Terraform Plan (writes plan.out) --------
+      # -------- Plan (write plan.out) --------
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform plan -no-color -input=false -out=plan.out
 
-      # -------- Upload the plan artifact (optional but useful) --------
+      # -------- Upload the plan (optional) --------
       - name: Upload TF plan (optional)
         if: always()
         uses: actions/upload-artifact@v4
@@ -80,7 +78,7 @@ jobs:
           name: tfplan
           path: ${{ env.TF_WORKDIR }}/plan.out
 
-      # -------- Terraform Apply (gated to main) --------
+      # -------- Apply (only on main) --------
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         working-directory: ${{ env.TF_WORKDIR }}
