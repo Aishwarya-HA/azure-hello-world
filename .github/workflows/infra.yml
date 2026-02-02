@@ -28,12 +28,13 @@ env:
 jobs:
   plan-apply:
     runs-on: ubuntu-latest
+
     steps:
       # -------- Checkout --------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -------- Azure login via OIDC --------
+      # -------- Azure login via OIDC (no client secret needed) --------
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -41,7 +42,7 @@ jobs:
           tenant-id:       ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      # -------- Export ARM_* env for the Terraform provider --------
+      # -------- Make OIDC creds visible to Terraform provider --------
       - name: Export ARM_* env for Terraform (OIDC)
         run: |
           echo "ARM_CLIENT_ID=${{ env.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
@@ -65,12 +66,17 @@ jobs:
         working-directory: ${{ env.TF_WORKDIR }}
         run: terraform validate
 
-      # -------- Plan (write plan.out) --------
+      # -------- (optional) List working dir to confirm tfvars presence --------
+      - name: List TF working directory
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: ls -la
+
+      # -------- Plan (explicitly load terraform.tfvars) --------
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform plan -no-color -input=false -out=plan.out
+        run: terraform plan -no-color -input=false -var-file=terraform.tfvars -out=plan.out
 
-      # -------- Upload the plan (optional) --------
+      # -------- Upload the plan artifact (optional but useful) --------
       - name: Upload TF plan (optional)
         if: always()
         uses: actions/upload-artifact@v4
