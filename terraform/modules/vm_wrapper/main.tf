@@ -38,23 +38,22 @@ resource "azurerm_network_interface" "nic" {
 # Linux VM
 #############################################
 resource "azurerm_linux_virtual_machine" "vm" {
-  depends_on = [azurerm_network_interface.nic]
-
   name                = var.name
   location            = var.location
   resource_group_name = var.resource_group_name
+  size                = var.vm_size
 
-  size                  = var.vm_size
-  admin_username        = var.admin_username
-  network_interface_ids = [azurerm_network_interface.nic.id]
+  # ... (image, os_disk, NIC, etc.)
 
-  # Enforce key-based auth (recommended)
-  disable_password_authentication = var.disable_password_authentication
+  admin_username = var.admin_username
 
-  # Required when password auth is disabled
+  # ✅ Use ssh_public_key from module inputs
   admin_ssh_key {
-  username   = var.admin_username
-  public_key = var.ssh_public_key
+    username   = var.admin_username
+    public_key = var.ssh_public_key
+  }
+
+  tags = var.tags
 }
 
   os_disk {
