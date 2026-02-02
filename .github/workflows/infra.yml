@@ -1,106 +1,122 @@
-name: IaC - Azure VM hello world
+name: iac - azurerm v4 hello world
+
+# Required for azure/login with OIDC and for reading repo contents
+permissions:
+  id-token: write
+  contents: read
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main"]         # <-- change if your default branch is different, or remove this block
     paths:
-      - '*.tf'
-      - 'modules/**'
-      - 'cloud-init.yaml'
-      - 'terraform.tfvars'
-      - '.github/workflows/infra.yml'
+      - ".github/workflows/*.yml"  # <-- fixed dot prefix
+      - "infra/**"                 # <-- change to your actual TF folder if not 'infra'
+      - ".github/*.yml"
   pull_request:
     branches: ["main"]
     paths:
-      - '*.tf'
-      - 'modules/**'
-      - 'cloud-init.yaml'
-      - 'terraform.tfvars'
-      - '.github/workflows/infra.yml'
-
-permissions:
-  id-token: write          # OIDC to Azure
-  contents: read
+      - ".github/workflows/*.yml"
+      - "infra/**"
+  workflow_dispatch: {}
 
 env:
-  TF_WORKDIR: .            # repo root (your main.tf is here)
-  TF_VERSION: '1.7.5'
-
-  # Azure IDs (store as GitHub secrets)
-  AZURE_TENANT_ID:        ${{ secrets.AZURE_TENANT_ID }}
-  AZURE_SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  AZURE_CLIENT_ID:        ${{ secrets.AZURE_CLIENT_ID }}
+  # Centralize your Terraform directory and version here
+  TF_DIR: "infra"            # <-- set this to the folder that contains your *.tf files
+  TF_VERSION: "1.6.6"        # use the TF version you need
 
 jobs:
-  plan-apply:
+  plan:
+    name: Terraform Plan
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Login to Azure using federated identity (OIDC)
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id:       ${{ env.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-
-      # Make OIDC creds visible to Terraform provider
-      - name: Export ARM_* env for Terraform (OIDC)
-        shell: bash
+      # Quick visibility to ensure the runner sees your files and correct path
+      - name: Debug – show TF files
         run: |
-          echo "ARM_CLIENT_ID=${{ env.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_TENANT_ID=${{ env.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_SUBSCRIPTION_ID=${{ env.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
+          echo "PWD: $PWD"
+          ls -la
+          echo "---- find *.tf under repo ----"
+          find . -maxdepth 4 -type f -name "*.tf" -print || true
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # Export all required module variables without needing a tfvars file
-      - name: Export TF_VAR_* (no tfvars file needed)
-        shell: bash
-        run: |
-          # ---- required variables your root expects ----
-          echo 'TF_VAR_prefix=demo' >> "$GITHUB_ENV"
-          echo 'TF_VAR_location=eastus' >> "$GITHUB_ENV"
-          echo 'TF_VAR_address_space=["10.0.0.0/16"]' >> "$GITHUB_ENV"
-          echo 'TF_VAR_subnet_prefix=10.0.1.0/24' >> "$GITHUB_ENV"
-          echo 'TF_VAR_admin_username=azureuser' >> "$GITHUB_ENV"
-          echo 'TF_VAR_vm_size=Standard_DC1s_v3' >> "$GITHUB_ENV"
-          echo 'TF_VAR_tags={ environment = "prod", project = "azure-wrapper" }' >> "$GITHUB_ENV"
+      # Azure login via OIDC (requires the 3 secrets below at repo/org level)
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:        ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-          # ---- SSH public key from secret (required) ----
-          if [ -z "${{ secrets.SSH_PUBLIC_KEY }}" ]; then
-            echo "❌ Missing repo secret SSH_PUBLIC_KEY (public key). Add it in Settings → Secrets and variables → Actions."
-            exit 1
-          fi
-          echo 'TF_VAR_ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}' >> "$GITHUB_ENV"
+      # Export env for the Azurerm provider (optional if your provider block handles auth)
+      - name: Prepare env for Terraform
+        run: |
+          echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
       - name: Terraform Init
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform init -upgrade
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
 
       - name: Terraform Validate
-        working-directory: ${{ env.TF_WORKDIR }}
+        working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
       - name: Terraform Plan
-        working-directory: ${{ env.TF_WORKDIR }}
+        id: tfplan
+        working-directory: ${{ env.TF_DIR }}
         run: terraform plan -no-color -input=false -out=plan.out
 
-      - name: Upload TF plan (optional)
-        if: always()
+      - name: Save plan as text
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform show -no-color plan.out > plan.txt
+
+      - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan
-          path: ${{ env.TF_WORKDIR }}/plan.out
+          name: terraform-plan
+          path: ${{ env.TF_DIR }}/plan.txt
+
+  apply:
+    name: Terraform Apply (manual)
+    runs-on: ubuntu-latest
+    needs: plan
+    if: github.event_name == 'workflow_dispatch'   # gate apply to manual runs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:        ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      # Apply expects the same plan file created in the plan job.
+      # If you want to reuse the exact plan artifact across jobs, download it here.
+      # Alternatively, you can regenerate plan on apply (safer for drift).
+      - name: Terraform Plan (re-create for apply)
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Terraform Apply
-        if: ${{ github.ref == 'refs/heads/main' }}
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform apply -no-color -input=false plan.out
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve plan.out
