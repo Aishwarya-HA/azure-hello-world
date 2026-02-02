@@ -1,13 +1,9 @@
 ############################################################
-# Root module: resource group + network + VM via module
-# Notes:
-# - SSH key is passed to the module as `admin_ssh_key = var.ssh_public_key`
-# - No locals inside the module call
+# Root module: RG + VNet + Subnet + NSG + VM via module
 ############################################################
 
 # ---------- Optional naming helpers ----------
 locals {
-  # A consistent prefix and common names
   rg_name     = "${var.prefix}-rg"
   vnet_name   = "${var.prefix}-vnet"
   subnet_name = "${var.prefix}-subnet"
@@ -20,12 +16,7 @@ resource "azurerm_resource_group" "rg" {
   name     = local.rg_name
   location = var.location
 
-  tags = merge(
-    {
-      "managed-by" = "terraform"
-    },
-    var.tags
-  )
+  tags = merge({ "managed-by" = "terraform" }, var.tags)
 }
 
 # ---------- Virtual Network ----------
@@ -46,7 +37,7 @@ resource "azurerm_subnet" "subnet" {
   address_prefixes     = [var.subnet_prefix]
 }
 
-# ---------- NSG for SSH (allow inbound 22) ----------
+# ---------- NSG for SSH (Allow inbound 22) ----------
 resource "azurerm_network_security_group" "ssh_nsg" {
   name                = local.nsg_name
   location            = azurerm_resource_group.rg.location
@@ -67,15 +58,13 @@ resource "azurerm_network_security_group" "ssh_nsg" {
   tags = var.tags
 }
 
-# ---------- Associate NSG to Subnet ----------
+# ---------- Associate NSG with Subnet ----------
 resource "azurerm_subnet_network_security_group_association" "subnet_nsg" {
   subnet_id                 = azurerm_subnet.subnet.id
   network_security_group_id = azurerm_network_security_group.ssh_nsg.id
 }
 
 # ---------- VM via module ----------
-# Your module should accept these inputs. If your module has different
-# variable names, tell me and I’ll adjust them exactly.
 module "web_vm" {
   source = "./modules/vm_wrapper"
 
@@ -89,18 +78,14 @@ module "web_vm" {
   vm_size        = var.vm_size
   admin_username = var.admin_username
 
-  # ✅ Pass the key with the name the module actually uses
+  # ✅ Consistent key variable name
   ssh_public_key = var.ssh_public_key
 
-  # Tags
+  # (Optional) pass cloud-init file path (module will base64 it if provided)
+  cloud_init_file = "${path.root}/cloud-init.yaml"
+
   tags = var.tags
 }
 
-# ---------- (Optional) Outputs ----------
-# Uncomment/adjust based on what your module exposes
-# output "vm_id" {
-#   value = module.web_vm.vm_id
-# }
-# output "vm_public_ip" {
-#   value = module.web_vm.public_ip
-# }
+# ---------- Optional outputs (if module exposes them) ----------
+# (Kept in outputs.tf)
