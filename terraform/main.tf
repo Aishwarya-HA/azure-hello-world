@@ -89,8 +89,8 @@ module "web_vm" {
   vm_size        = var.vm_size
   admin_username = var.admin_username
 
-  # ✅ Pass your public SSH key using the module’s expected input name
-  admin_ssh_key = var.ssh_public_key
+  # ✅ Pass the key with the name the module actually uses
+  ssh_public_key = var.ssh_public_key
 
   # Tags
   tags = var.tags
