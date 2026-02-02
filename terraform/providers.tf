@@ -1,7 +1,7 @@
 terraform {
   required_version = ">= 1.6.0"
 
-  # 🔐 Remote state in Azure Storage (adjust these to your real names)
+  # 🔐 Remote state in Azure Storage (adjust to your real names)
   backend "azurerm" {
     resource_group_name  = "tfstate-rg"
     storage_account_name = "tfstatestoreaish123"
@@ -12,7 +12,6 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      # Pin to a stable version
       version = "~> 3.103.0"
     }
     time = {
@@ -22,14 +21,13 @@ terraform {
   }
 }
 
-# ✅ AzureRM provider configured for GitHub Actions OIDC
 provider "azurerm" {
   features {}
 
-  # Tell provider to use federated identity from GitHub Actions
+  # ✅ Use federated identity from GitHub Actions
   use_oidc = true
 
-  # Optional (omit if you export ARM_* in the workflow)
+  # Optional (omit when exporting ARM_* in the workflow)
   # subscription_id = var.subscription_id
   # tenant_id       = var.tenant_id
   # client_id       = var.client_id
