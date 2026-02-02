@@ -1,107 +1,80 @@
-name: IaC - Azure VM Hello World
+name: IaC - Azure VM hello world
 
 on:
   push:
-    branches: ["main"]
+    branches: ['main']
     paths:
-      - "terraform/**"
-      - ".github/workflows/infra.yml"
+      - 'terraform/**'
+      - '.github/workflows/infra.yml'
   pull_request:
+    branches: ['main']
     paths:
-      - "terraform/**"
-      - ".github/workflows/infra.yml"
-  workflow_dispatch:
+      - 'terraform/**'
+      - '.github/workflows/infra.yml'
 
 permissions:
-  id-token: write
+  id-token: write      # for OIDC
   contents: read
 
 env:
-  # Azure OIDC login
-  ARM_USE_OIDC: true
-  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  # ----- single source of truth for paths -----
+  TF_WORKDIR: terraform
+  TF_VERSION: '1.7.5'
 
-  # Terraform settings
-  TF_WORKING_DIR: ./terraform
-  TF_LOG: INFO
-  TF_LOG_LEVEL: INFO
-
-  # Name prefix (kept as a secret, as you had)
-  
+  # ----- Azure OIDC login (fill your values/secrets) -----
+  AZURE_TENANT_ID:    ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_CLIENT_ID:    ${{ secrets.AZURE_CLIENT_ID }}
 
 jobs:
   plan-apply:
     runs-on: ubuntu-latest
-
     steps:
+      # -------- Checkout --------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # -------- Azure login (OIDC) --------
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
+      # -------- Setup Terraform --------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.7.5
+          terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform Init (upgrade providers)
-        working-directory: ${{ env.TF_WORKING_DIR }}
+      # -------- Terraform Init --------
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKDIR }}
         run: terraform init -upgrade
 
+      # -------- Terraform Validate --------
       - name: Terraform Validate
-        working-directory: ${{ env.TF_WORKING_DIR }}
+        working-directory: ${{ env.TF_WORKDIR }}
         run: terraform validate
 
+      # -------- Terraform Plan (write a real file) --------
       - name: Terraform Plan
-        id: plan
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        env:
-          # Required TF variables
-          TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
-          TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-          
-          # NOTE: We intentionally do NOT set TF_VAR_location or TF_VAR_vm_size here.
-          # Terraform will use defaults from variables.tf (location="eastus", vm_size="Standard_D2s_v5").
-        run: |
-          set -euo pipefail
-          terraform version
-          terraform validate
-          terraform plan -no-color -input=false -out=tfplan | tee plan.out
-          test -s tfplan
+        working-directory: ${{ env.TF_WORKDIR }}
+        # -no-color makes logs clean; -out writes the plan file deterministically
+        run: terraform plan -no-color -input=false -out=plan.out
 
-      - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        env:
-          TF_VAR_subscription_id: ${{ secrets.TF_VAR_SUBSCRIPTION_ID }}
-          TF_VAR_ssh_public_key:  ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-         
-        run: |
-          set -euo pipefail
-          terraform apply -no-color -input=false -parallelism=1 -auto-approve tfplan | tee apply.out
-
-      - name: Show Outputs
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          echo "### Terraform Outputs" >> $GITHUB_STEP_SUMMARY
-          terraform output >> $GITHUB_STEP_SUMMARY || true
-          if terraform output -raw web_url >/dev/null 2>&1; then
-            echo "Open your site: $(terraform output -raw web_url)" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload TF logs (optional)
+      # -------- Upload the plan as artifact (optional) --------
+      - name: Upload TF plan (optional)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tf-logs
-          path: |
-            terraform/plan.out
-            terraform/apply.out
+          name: tfplan
+          path: ${{ env.TF_WORKDIR }}/plan.out
+
+      # -------- Terraform Apply (uses the plan written above) --------
+      # Gate this to main; remove the if to always apply after plan
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        working-directory: ${{ env.TF_WORKDIR }}
+        run: terraform apply -no-color -input=false plan.out
