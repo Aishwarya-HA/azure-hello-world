@@ -2,7 +2,7 @@ name: IaC - Azure VM hello world
 
 on:
   push:
-    branches: ['main']   # change if you use a different default branch
+    branches: ['main']   # change if your default branch is different
     paths:
       - '*.tf'
       - 'modules/**'
@@ -19,14 +19,25 @@ on:
       - '.github/workflows/infra.yml'
 
 permissions:
-  id-token: write           # OIDC to Azure
+  id-token: write       # Required for Azure OIDC
   contents: read
 
 env:
-  TF_WORKDIR: .             # <-- repo root (your main.tf & terraform.tfvars live here)
+  # Terraform
+  TF_WORKDIR: .         # repo root (your main.tf & terraform.tfvars are here)
   TF_VERSION: '1.7.5'
 
-  # Azure IDs (store these as GitHub repo/org secrets)
+  # Defaults used if we auto-create terraform.tfvars
+  DEFAULT_PREFIX: demo
+  DEFAULT_LOCATION: eastus
+  DEFAULT_ADDRESS_SPACE: '["10.0.0.0/16"]'   # keep as JSON-like string
+  DEFAULT_SUBNET_PREFIX: 10.0.1.0/24
+  DEFAULT_ADMIN_USERNAME: azureuser
+  DEFAULT_VM_SIZE: Standard_DC1s_v3
+  DEFAULT_ENVIRONMENT: prod
+  DEFAULT_PROJECT: azure-wrapper
+
+  # Azure (set these as GitHub repo/org secrets)
   AZURE_TENANT_ID:        ${{ secrets.AZURE_TENANT_ID }}
   AZURE_SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   AZURE_CLIENT_ID:        ${{ secrets.AZURE_CLIENT_ID }}
@@ -40,7 +51,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Azure login via OIDC
+      # Azure login via OIDC (no client secret needed)
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -50,11 +61,12 @@ jobs:
 
       # Make OIDC creds visible to Terraform provider
       - name: Export ARM_* env for Terraform (OIDC)
+        shell: bash
         run: |
-          echo "ARM_CLIENT_ID=${{ env.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=${{ env.AZURE_TENANT_ID }}" >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=${{ env.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
-          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+          echo "ARM_CLIENT_ID=${{ env.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_TENANT_ID=${{ env.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_SUBSCRIPTION_ID=${{ env.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
 
       # Setup Terraform
       - name: Setup Terraform
@@ -79,32 +91,14 @@ jobs:
           pwd
           ls -la
 
-      # Verify tfvars exists (simple & robust)
-      - name: Verify terraform.tfvars exists
+      # Ensure terraform.tfvars exists:
+      #  - If present, keep it
+      #  - Otherwise create from defaults + SSH_PUBLIC_KEY secret
+      - name: Ensure terraform.tfvars exists (or create)
         working-directory: ${{ env.TF_WORKDIR }}
         shell: bash
         run: |
-          if [[ ! -f "terraform.tfvars" ]]; then
-            echo "❌ terraform.tfvars not found in $(pwd). Create it next to main.tf."
-            exit 1
-          fi
-          echo "✅ terraform.tfvars found"
-
-      # Plan (explicitly load terraform.tfvars)
-      - name: Terraform Plan
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform plan -no-color -input=false -var-file=terraform.tfvars -out=plan.out
-
-      # Upload plan (optional)
-      - name: Upload TF plan (optional)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan
-          path: ${{ env.TF_WORKDIR }}/plan.out
-
-      # Apply (only on main)
-      - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'
-        working-directory: ${{ env.TF_WORKDIR }}
-        run: terraform apply -no-color -input=false plan.out
+          set -euo pipefail
+          if [[ -f "terraform.tfvars" ]]; then
+            echo "✅ terraform.tfvars found"
+            # Print without exposing the key
