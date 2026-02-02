@@ -1,60 +1,50 @@
 #############################################
-# Workaround: control-plane propagation delay
-# (prevents "Root object was present, but now absent" on NIC)
+# modules/vm_wrapper/main.tf (updated)
 #############################################
-resource "time_sleep" "network_delay" {
-  # give Azure a moment after VNet/Subnet/PIP are created in root
-  create_duration = "8s"
-}
 
-#############################################
 # NIC
-#############################################
 resource "azurerm_network_interface" "nic" {
-  depends_on = [time_sleep.network_delay]
-
   name                = "${var.name}-nic"
   location            = var.location
   resource_group_name = var.resource_group_name
 
   ip_configuration {
-    name                          = "internal"
+    name                          = "ipconfig1"
     subnet_id                     = var.subnet_id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = var.public_ip_id
+    # If you add a Public IP resource in this module, wire it here:
+    # public_ip_address_id          = azurerm_public_ip.pip.id
   }
 
   tags = var.tags
-
-  # Optional: ignore short-lived diffs while Azure populates fields
-  lifecycle {
-    ignore_changes = [
-      ip_configuration[0].private_ip_address
-    ]
-  }
 }
 
-#############################################
 # Linux VM
-#############################################
 resource "azurerm_linux_virtual_machine" "vm" {
   name                = var.name
   location            = var.location
   resource_group_name = var.resource_group_name
   size                = var.vm_size
 
-  # ... (image, os_disk, NIC, etc.)
+  network_interface_ids = [azurerm_network_interface.nic.id]
 
-  admin_username = var.admin_username
+  # OS + Admin
+  admin_username                      = var.admin_username
+  disable_password_authentication     = true
 
-  # ✅ Use ssh_public_key from module inputs
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.ssh_public_key
+  # Optional cloud-init
+  # If cloud_init_file is provided, use it; else omit
+  dynamic "custom_data" {
+    for_each = var.cloud_init_file != "" ? [1] : []
+    content {
+      # NOTE: custom_data expects base64
+      # azurerm provider: custom_data is a string, but docs recommend base64
+      # Using filebase64 ensures correct encoding
+    }
   }
 
-  tags = var.tags
-}
+  # Simpler form (no dynamic): if you always want cloud-init, uncomment:
+  # custom_data = filebase64("${path.root}/cloud-init.yaml")
 
   os_disk {
     name                 = "${var.name}-osdisk"
@@ -62,7 +52,7 @@ resource "azurerm_linux_virtual_machine" "vm" {
     storage_account_type = "Standard_LRS"
   }
 
-  # Ubuntu 22.04 LTS (Jammy)
+  # Ubuntu 22.04 LTS Gen2
   source_image_reference {
     publisher = "Canonical"
     offer     = "0001-com-ubuntu-server-jammy"
@@ -70,25 +60,24 @@ resource "azurerm_linux_virtual_machine" "vm" {
     version   = "latest"
   }
 
-  # cloud-init: azurerm expects base64-encoded string
-  custom_data = var.custom_data_b64
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = var.ssh_public_key
+  }
 
   tags = var.tags
 
-  # Prevent noisy diffs on admin_ssh_key if you only change vm_size
+  # Optional: keep diffs quieter
   lifecycle {
-    ignore_changes = [
-      admin_ssh_key
-    ]
+    ignore_changes = [tags]
   }
 
-  # Sometimes creation is slow due to control-plane delays
   timeouts {
-    create = "30m"
-    update = "30m"
+    create = "60m"
+    delete = "60m"
   }
 }
 
-#############################################
-# (Module outputs are in outputs.tf)
-#############################################
+# If you decide to add a Public IP later, add:
+# resource "azurerm_public_ip" "pip" { ... }
+# and output it from outputs.tf
