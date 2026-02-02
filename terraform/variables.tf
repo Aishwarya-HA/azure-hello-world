@@ -2,10 +2,7 @@
 # Root variables.tf (updated)
 #############################################
 
-# Subscription / Region
-# Note: If you're using OIDC in GitHub Actions and exporting ARM_* env vars,
-# you don't need to pass subscription_id via Terraform variables. It's fine to keep
-# this if you reference it anywhere; otherwise you can remove it.
+# Subscription / Region (subscription_id optional if using OIDC + ARM_* envs)
 variable "subscription_id" {
   description = "Azure subscription ID where resources will be deployed."
   type        = string
@@ -29,40 +26,37 @@ variable "prefix" {
   }
 }
 
-# ---------- NEW: Network variables required by main.tf ----------
+# ---------- Network ----------
 variable "address_space" {
   description = "VNet address spaces."
-  type        = list(string)
-  # Example: ["10.0.0.0/16"]
+  type        = list(string)   # e.g., ["10.0.0.0/16"]
 }
 
 variable "subnet_prefix" {
   description = "Subnet CIDR prefix."
-  type        = string
-  # Example: "10.0.1.0/24"
+  type        = string         # e.g., "10.0.1.0/24"
 }
 
-# Admin username
+# ---------- Admin + SSH ----------
 variable "admin_username" {
   description = "Admin username for the VM."
   type        = string
   default     = "azureuser"
 }
 
-# SSH PUBLIC key (contents of your .pub file)
 variable "ssh_public_key" {
   type        = string
   description = "SSH public key for VM admin access"
 }
 
-# VM sizing (resize knob)
+# ---------- VM size ----------
 variable "vm_size" {
   description = "Azure VM size"
   type        = string
   default     = "Standard_DC1s_v3"
 }
 
-# (Optional) Tags
+# ---------- Tags ----------
 variable "tags" {
   description = "Common tags to apply to all resources."
   type        = map(string)
