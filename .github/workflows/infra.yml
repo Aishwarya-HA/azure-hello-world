@@ -2,7 +2,7 @@ name: IaC - Azure VM hello world
 
 on:
   push:
-    branches: ['main']
+    branches: ["main"]
     paths:
       - '*.tf'
       - 'modules/**'
@@ -10,7 +10,7 @@ on:
       - 'terraform.tfvars'
       - '.github/workflows/infra.yml'
   pull_request:
-    branches: ['main']
+    branches: ["main"]
     paths:
       - '*.tf'
       - 'modules/**'
