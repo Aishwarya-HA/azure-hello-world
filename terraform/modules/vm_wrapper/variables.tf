@@ -28,14 +28,21 @@ variable "admin_username" {
   description = "Admin username"
 }
 
-# ✅ NEW: matches what your module main.tf uses
+# ✅ Consistent with the usage inside the module
 variable "ssh_public_key" {
   type        = string
   description = "SSH public key for VM admin access"
 }
 
+# Optional: pass a cloud-init file path from root (if exists)
+variable "cloud_init_file" {
+  type        = string
+  description = "Path to cloud-init YAML file (optional)"
+  default     = ""
+}
+
 variable "tags" {
   type        = map(string)
-  description = "Tags to apply"
+  description = "Tags to apply to resources"
   default     = {}
 }
