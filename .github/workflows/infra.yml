@@ -6,7 +6,7 @@ permissions:
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main"]             # change if your default branch differs
     paths:
       - ".github/workflows/*.yml"
       - "terraform/**"
@@ -17,35 +17,103 @@ on:
       - ".github/workflows/*.yml"
       - "terraform/**"
       - "**/*.tfvars"
-  workflow_dispatch: {}
+  workflow_dispatch: {}             # allow manual runs
 
 env:
-  TF_DIR: "terraform"
-  TF_VERSION: "1.6.6"
+  TF_DIR: "terraform"               # folder that contains your *.tf files
+  TF_VERSION: "1.6.6"               # pin to your required TF version
 
 jobs:
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Diagnose repo layout
+      # Show the files the runner can actually see (keep until green)
       - name: Debug – list TF & tfvars
         run: |
           echo "PWD: $PWD"
           echo "---- files we care about ----"
           find . -maxdepth 4 -type f \( -name "*.tf" -o -name "*.tfvars" \) -print | sort
 
+      # Fail fast if the tfvars file isn't present in TF_DIR
       - name: Ensure terraform.tfvars exists where plan will run
         run: |
           if [ ! -f "${{ env.TF_DIR }}/terraform.tfvars" ]; then
             echo "::error file=${{ env.TF_DIR }}/terraform.tfvars::terraform.tfvars not found at ${{ env.TF_DIR }}/"
-            echo "Tip: create ${{
-              env.TF_DIR }}/terraform.tfvars with values for address_space, subnet_prefix, ssh_public_key."
+            echo "Tip: create ${{ env.TF_DIR }}/terraform.tfvars with values for address_space, subnet_prefix, ssh_public_key."
             exit 1
           fi
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:        ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Export env vars the azurerm provider can read (if you rely on env auth)
+      - name: Prepare env for Terraform
+        run: |
+          echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
+
+      # Auto-fix formatting so the pipeline progresses
+      - name: Terraform Fmt (auto-fix)
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -recursive
+
+      # Masked preview so you can confirm the tfvars is in place
+      - name: Debug – show tfvars content (masked)
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          echo "PWD: $PWD"
+          ls -la
+          echo "---- terraform.tfvars (masked) ----"
+          sed -E 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' terraform.tfvars
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: tfplan
+        working-directory: ${{ env.TF_DIR }}
+        # No -var-file: terraform will auto-load terraform.tfvars from this directory
+        run: terraform plan -no-color -input=false -out=plan.out
+
+      - name: Save plan as text
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform show -no-color plan.out > plan.txt
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_DIR }}/plan.txt
+
+  apply:
+    name: Terraform Apply (manual)
+    runs-on: ubuntu-latest
+    needs: plan
+    if: github.event_name == 'workflow_dispatch'  # only allow apply when run manually
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -66,63 +134,11 @@ jobs:
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
-      - name: Terraform Fmt (auto-fix)
-        working-directory: ${{ env.TF_DIR }}
-        run: terraform fmt -recursive
-
-      # Safe preview of tfvars (masks ssh key)
-      - name: Debug – show tfvars content (masked)
-        working-directory: ${{ env.TF_DIR }}
-        run: |
-          echo "PWD: $PWD"
-          ls -la
-          echo "---- terraform.tfvars (masked) ----"
-          sed -E 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' terraform.tfvars
-
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
         run: terraform init -input=false
 
-      - name: Terraform Validate
-        working-directory: ${{ env.TF_DIR }}
-        run: terraform validate
-
-      - name: Terraform Plan
-        id: tfplan
-        working-directory: ${{ env.TF_DIR }}
-        # No -var-file: terraform will auto-load terraform.tfvars in this directory
-        run: terraform plan -no-color -input=false -out=plan.out
-
-      - name: Save plan as text
-        working-directory: ${{ env.TF_DIR }}
-        run: terraform show -no-color plan.out > plan.txt
-
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: ${{ env.TF_DIR }}/plan.txt
-
-  apply:
-    name: Terraform Apply (manual)
-    runs-on: ubuntu-latest
-    needs: plan
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-      - uses: azure/login@v2
-        with:
-          client-id:        ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Terraform Init
-        working-directory: ${{ env.TF_DIR }}
-        run: terraform init -input=false
-
+      # Re-create plan for apply (simpler than artifact passing)
       - name: Terraform Plan (re-create)
         working-directory: ${{ env.TF_DIR }}
         run: terraform plan -no-color -input=false -out=plan.out
