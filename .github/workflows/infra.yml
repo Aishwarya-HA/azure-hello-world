@@ -20,7 +20,7 @@ on:
   workflow_dispatch: {}
 
 env:
-  TF_DIR: "terraform"      # your Terraform root
+  TF_DIR: "terraform"
   TF_VERSION: "1.6.6"
 
 jobs:
@@ -28,22 +28,18 @@ jobs:
     name: Terraform Plan
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Debug – show TF files
+      - name: Debug – list TF & tfvars
         run: |
           echo "PWD: $PWD"
-          find . -maxdepth 4 -type f -name "*.tf" -print
-          find . -maxdepth 2 -type f -name "*.tfvars" -print || true
+          find . -maxdepth 4 -type f \( -name "*.tf" -o -name "*.tfvars" \) -print
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           client-id:        ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
@@ -56,7 +52,6 @@ jobs:
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
-      # (optional) auto-fix formatting
       - name: Terraform Fmt (auto-fix)
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -recursive
@@ -72,15 +67,14 @@ jobs:
       - name: Terraform Plan
         id: tfplan
         working-directory: ${{ env.TF_DIR }}
-        # IMPORTANT: pass the tfvars file located at repo root
-        run: terraform plan -no-color -input=false -var-file="../terraform.tfvars" -out=plan.out
+        # No -var-file; relies on terraform/terraform.tfvars in this dir
+        run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Save plan as text
         working-directory: ${{ env.TF_DIR }}
         run: terraform show -no-color plan.out > plan.txt
 
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
           path: ${{ env.TF_DIR }}/plan.txt
@@ -91,16 +85,11 @@ jobs:
     needs: plan
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           client-id:        ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
@@ -112,7 +101,7 @@ jobs:
 
       - name: Terraform Plan (re-create)
         working-directory: ${{ env.TF_DIR }}
-        run: terraform plan -no-color -input=false -var-file="../terraform.tfvars" -out=plan.out
+        run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Terraform Apply
         working-directory: ${{ env.TF_DIR }}
