@@ -20,12 +20,12 @@ on:
   workflow_dispatch: {}
 
 env:
-  TF_DIR: "terraform"
   TF_VERSION: "1.6.6"
 
+# Run all steps inside terraform/ by default (prevents path mistakes)
 defaults:
   run:
-    working-directory: terraform   # <<< run all steps inside terraform/ by default
+    working-directory: terraform
 
 jobs:
   plan:
@@ -36,20 +36,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Debug – where am I?
+      # Helpful visibility: where we are, what files exist, what commit we’re on
+      - name: Debug – where am I & what ref is checked out
         run: |
-          echo "PWD: $PWD"
-          echo "Listing here:"
-          ls -la
-          echo "Find tf & tfvars (from here):"
-          find . -maxdepth 3 -type f \( -name "*.tf" -o -name "*.tfvars" \) -print | sort
+          echo "PWD: $(pwd)"
+          echo "Top-level listing:"
+          ls -la ..
+          echo "Here listing:"
+          ls -la .
+          echo "Find *.tf and *.tfvars (3 levels):"
+          find . .. -maxdepth 3 -type f \( -name '*.tf' -o -name '*.tfvars' \) -print | sed 's#^\./##' | sort
+          echo "Git ref: $GITHUB_REF"
+          echo "Git sha: $GITHUB_SHA"
+          git rev-parse --is-inside-work-tree || true
+          git log -1 --pretty=oneline || true
 
+      # --- Option A: Fail if terraform.tfvars is missing (strict) ---
       - name: Ensure terraform.tfvars exists
         run: |
           if [ ! -f "terraform.tfvars" ]; then
             echo "::error file=terraform.tfvars::terraform.tfvars not found"
+            echo "Listing here for troubleshooting:"
+            ls -la .
             exit 1
           fi
+
+      # --- Option B: (Alternative) Create terraform.tfvars from secrets if missing ---
+      # Comment OUT the step above and UNCOMMENT this block if you prefer generating tfvars dynamically.
+      # - name: Create terraform.tfvars from secrets (fallback)
+      #   run: |
+      #     if [ ! -f "terraform.tfvars" ]; then
+      #       cat > terraform.tfvars <<'EOF'
+      #       # Example vars (change to match your variables.tf)
+      #       location        = "${{ secrets.TF_LOCATION }}"
+      #       resource_group  = "${{ secrets.TF_RG }}"
+      #       vm_size         = "${{ secrets.TF_VM_SIZE }}"
+      #       ssh_public_key  = "${{ secrets.TF_SSH_PUB }}"
+      #       # add more variables as needed...
+      #       EOF
+      #       echo "Created terraform.tfvars from secrets."
+      #     else
+      #       echo "terraform.tfvars already present, not overwriting."
+      #     fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -63,7 +91,7 @@ jobs:
           tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
           subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Prepare env for Terraform
+      - name: Prepare env for Terraform (AzureRM OIDC)
         shell: bash
         run: |
           echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
@@ -71,15 +99,19 @@ jobs:
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
-      - name: Terraform Fmt (auto-fix)
+      - name: Terraform fmt (auto-fix)
         run: terraform fmt -recursive
 
-      - name: Debug – show tfvars (masked)
+      - name: Show tfvars (masked)
         run: |
-          echo "PWD: $PWD"
+          echo "PWD: $(pwd)"
           ls -la
           echo "---- terraform.tfvars (masked) ----"
-          sed -E 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' terraform.tfvars || true
+          # redact any obvious sensitive line by key name pattern (adjust to your file)
+          sed -E \
+            -e 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' \
+            -e 's/(password *= *").*(")/\1***REDACTED***\2/' \
+            terraform.tfvars || true
 
       - name: Terraform Init
         run: terraform init -input=false
@@ -89,7 +121,7 @@ jobs:
 
       - name: Terraform Plan
         id: tfplan
-        # terraform auto-loads ./terraform.tfvars in this directory
+        # terraform auto-loads ./terraform.tfvars in this working directory
         run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Save plan as text
@@ -123,7 +155,7 @@ jobs:
           tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
           subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Prepare env for Terraform
+      - name: Prepare env for Terraform (AzureRM OIDC)
         shell: bash
         run: |
           echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
@@ -132,13 +164,13 @@ jobs:
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
       - name: Terraform Init
-        working-directory: ${{ env.TF_DIR }}   # explicitly switch here (apply job didn't set defaults)
+        working-directory: terraform
         run: terraform init -input=false
 
       - name: Terraform Plan (re-create)
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: terraform
         run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Terraform Apply
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: terraform
         run: terraform apply -auto-approve plan.out
