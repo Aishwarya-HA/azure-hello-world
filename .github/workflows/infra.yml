@@ -27,15 +27,25 @@ jobs:
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Diagnose repo layout
       - name: Debug – list TF & tfvars
         run: |
           echo "PWD: $PWD"
-          find . -maxdepth 4 -type f \( -name "*.tf" -o -name "*.tfvars" \) -print
+          echo "---- files we care about ----"
+          find . -maxdepth 4 -type f \( -name "*.tf" -o -name "*.tfvars" \) -print | sort
+
+      - name: Ensure terraform.tfvars exists where plan will run
+        run: |
+          if [ ! -f "${{ env.TF_DIR }}/terraform.tfvars" ]; then
+            echo "::error file=${{ env.TF_DIR }}/terraform.tfvars::terraform.tfvars not found at ${{ env.TF_DIR }}/"
+            echo "Tip: create ${{
+              env.TF_DIR }}/terraform.tfvars with values for address_space, subnet_prefix, ssh_public_key."
+            exit 1
+          fi
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -60,14 +70,14 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -recursive
 
-      # (Temporarily keep this to confirm file exists and values are read)
-      - name: Debug – show tfvars content (safe)
+      # Safe preview of tfvars (masks ssh key)
+      - name: Debug – show tfvars content (masked)
         working-directory: ${{ env.TF_DIR }}
         run: |
           echo "PWD: $PWD"
           ls -la
           echo "---- terraform.tfvars (masked) ----"
-          sed -E 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' terraform.tfvars || true
+          sed -E 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' terraform.tfvars
 
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
@@ -80,8 +90,8 @@ jobs:
       - name: Terraform Plan
         id: tfplan
         working-directory: ${{ env.TF_DIR }}
-        # Be explicit about tfvars file INSIDE the same directory
-        run: terraform plan -no-color -input=false -var-file="terraform.tfvars" -out=plan.out
+        # No -var-file: terraform will auto-load terraform.tfvars in this directory
+        run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Save plan as text
         working-directory: ${{ env.TF_DIR }}
@@ -99,16 +109,11 @@ jobs:
     needs: plan
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           client-id:        ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
@@ -120,7 +125,7 @@ jobs:
 
       - name: Terraform Plan (re-create)
         working-directory: ${{ env.TF_DIR }}
-        run: terraform plan -no-color -input=false -var-file="terraform.tfvars" -out=plan.out
+        run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Terraform Apply
         working-directory: ${{ env.TF_DIR }}
