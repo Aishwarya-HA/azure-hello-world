@@ -23,6 +23,10 @@ env:
   TF_DIR: "terraform"
   TF_VERSION: "1.6.6"
 
+defaults:
+  run:
+    working-directory: terraform   # <<< run all steps inside terraform/ by default
+
 jobs:
   plan:
     name: Terraform Plan
@@ -32,16 +36,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Debug – list TF & tfvars
+      - name: Debug – where am I?
         run: |
           echo "PWD: $PWD"
-          echo "---- files we care about ----"
-          find . -maxdepth 4 -type f \( -name "*.tf" -o -name "*.tfvars" \) -print | sort
+          echo "Listing here:"
+          ls -la
+          echo "Find tf & tfvars (from here):"
+          find . -maxdepth 3 -type f \( -name "*.tf" -o -name "*.tfvars" \) -print | sort
 
-      - name: Ensure terraform.tfvars exists where plan will run
+      - name: Ensure terraform.tfvars exists
         run: |
-          if [ ! -f "${{ env.TF_DIR }}/terraform.tfvars" ]; then
-            echo "::error file=${{ env.TF_DIR }}/terraform.tfvars::terraform.tfvars not found at ${{ env.TF_DIR }}/"
+          if [ ! -f "terraform.tfvars" ]; then
+            echo "::error file=terraform.tfvars::terraform.tfvars not found"
             exit 1
           fi
 
@@ -58,6 +64,7 @@ jobs:
           subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Prepare env for Terraform
+        shell: bash
         run: |
           echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
           echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
@@ -65,46 +72,41 @@ jobs:
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
       - name: Terraform Fmt (auto-fix)
-        working-directory: ${{ env.TF_DIR }}
         run: terraform fmt -recursive
 
-      - name: Debug – show tfvars content (masked)
-        working-directory: ${{ env.TF_DIR }}
+      - name: Debug – show tfvars (masked)
         run: |
           echo "PWD: $PWD"
           ls -la
           echo "---- terraform.tfvars (masked) ----"
-          sed -E 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' terraform.tfvars
+          sed -E 's/(ssh_public_key *= *").*(")/\1***REDACTED***\2/' terraform.tfvars || true
 
       - name: Terraform Init
-        working-directory: ${{ env.TF_DIR }}
         run: terraform init -input=false
 
       - name: Terraform Validate
-        working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
       - name: Terraform Plan
         id: tfplan
-        working-directory: ${{ env.TF_DIR }}
-        # No -var-file: auto-loads terraform/terraform.tfvars
+        # terraform auto-loads ./terraform.tfvars in this directory
         run: terraform plan -no-color -input=false -out=plan.out
 
       - name: Save plan as text
-        working-directory: ${{ env.TF_DIR }}
         run: terraform show -no-color plan.out > plan.txt
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
-          path: ${{ env.TF_DIR }}/plan.txt
+          path: terraform/plan.txt
 
   apply:
     name: Terraform Apply (manual)
     runs-on: ubuntu-latest
     needs: plan
     if: github.event_name == 'workflow_dispatch'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -122,6 +124,7 @@ jobs:
           subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Prepare env for Terraform
+        shell: bash
         run: |
           echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
           echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
@@ -129,7 +132,7 @@ jobs:
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
       - name: Terraform Init
-        working-directory: ${{ env.TF_DIR }}
+        working-directory: ${{ env.TF_DIR }}   # explicitly switch here (apply job didn't set defaults)
         run: terraform init -input=false
 
       - name: Terraform Plan (re-create)
