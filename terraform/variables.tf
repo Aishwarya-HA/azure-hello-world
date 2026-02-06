@@ -42,7 +42,7 @@ variable "ssh_public_key" {
   type        = string
   sensitive   = true
   description = "SSH public key for VM admin access"
-  default     = ""
+  #default     = ""
 }
 
 # ---------- VM size ----------
