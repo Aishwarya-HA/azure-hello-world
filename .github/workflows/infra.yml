@@ -85,7 +85,7 @@ jobs:
 
       - name: Terraform Init
         shell: bash
-        run: terraform init -input=false -upgrade
+        run: terraform init  -upgrade #-input=false
 
       - name: Terraform Validate
         shell: bash
@@ -169,7 +169,7 @@ jobs:
       - name: Terraform Init
         shell: bash
         working-directory: terraform
-        run: terraform init -input=false -upgrade
+        run: terraform init -upgrade  # -input=false 
 
       - name: Terraform Validate
         shell: bash
@@ -179,9 +179,9 @@ jobs:
       - name: Terraform Plan (re-create)
         shell: bash
         working-directory: terraform
-        run: terraform plan -no-color -input=false -out=tfplan
+        run: terraform plan -out=tfplan #-no-color -input=false
 
       - name: Terraform Apply
         shell: bash
         working-directory: terraform
-        run: terraform apply -no-color -input=false -auto-approve tfplan
+        run: terraform apply -auto-approve tfplan  #-no-color -input=false
