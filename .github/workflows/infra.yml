@@ -142,4 +142,6 @@ jobs:
       - name: Terraform Apply
         shell: bash
         working-directory: terraform
+        env:
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
         run: terraform apply -auto-approve plan.out
