@@ -20,106 +20,17 @@ on:
 env:
   TF_VERSION: "1.6.6"
 
-# All shell steps run from terraform/ unless they override it
 defaults:
   run:
     working-directory: terraform
 
 jobs:
-  plan:
-    name: Terraform Plan
+  plan_and_apply:
+    name: Terraform Plan and (conditionally) Apply
     runs-on: ubuntu-latest
 
     env:
       TF_VAR_ssh_public_key: ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false   # important: avoid false exit codes
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id:        ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:        ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Export ARM_* for OIDC
-        shell: bash
-        run: |
-          echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
-
-      # Resolve RSA public key for the VM: try GitHub profile; else generate ephemeral RSA-4096
-     # - name: Resolve SSH public key (prefer GitHub RSA; else generate)
-        # shell: bash
-        # run: |
-          # set -euo pipefail
-          # Try to fetch the actor's first public key from GitHub
-          # KEYS_JSON=$(curl -fsSL "https://api.github.com/users/${{ github.actor }}/keys")
-          # PUB=$(echo "$KEYS_JSON" | jq -r '.[0].key // empty')
-          # TYPE=$(echo "${PUB:-}" | awk '{print $1}')
-          # if [ -z "${PUB:-}" ] || [ "$TYPE" != "ssh-rsa" ]; then
-            # echo "::warning::GitHub profile key missing or not RSA (got: '${TYPE:-none}'). Generating ephemeral RSA 4096 keypair."
-            # mkdir -p ~/.ssh && chmod 700 ~/.ssh
-            # ssh-keygen -t rsa -b 4096 -N "" -C "gha-ephemeral-rsa@${GITHUB_REPOSITORY}" -f ~/.ssh/id_rsa >/dev/null 2>&1
-            # chmod 600 ~/.ssh/id_rsa
-            # PUB="$(cat ~/.ssh/id_rsa.pub)"
-            # TYPE="ssh-rsa"
-            # echo "::notice::Ephemeral RSA keypair created. Private key exists ONLY during this job."
-          # fi
-          # echo "Resolved SSH key type: ${TYPE}"
-          # echo "TF_VAR_ssh_public_key=${PUB}" >> "$GITHUB_ENV"
-
-      - name: Terraform fmt
-        shell: bash
-        run: terraform fmt -recursive
-
-      - name: Terraform Init
-        shell: bash
-        run: terraform init  -upgrade #-input=false
-
-      - name: Terraform Validate
-        shell: bash
-        run: terraform validate
-
-      # Defensive plan: fail only on real TF errors (not wrapper quirks)
-      - name: Terraform Plan
-        id: tfplan
-        shell: bash
-        run: |
-          set -e
-          terraform plan -no-color -input=false -out=tfplan || ec=$?
-          if [ "${ec:-0}" -eq 1 ]; then
-            echo "::error::Terraform plan failed"
-            exit 1
-          fi
-          # Treat other non-1 codes as success here (e.g., if -detailed-exitcode is ever reintroduced)
-          exit 0
-
-      - name: Save plan as text
-        shell: bash
-        run: terraform show -no-color tfplan > plan.txt
-
-      - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: terraform/plan.txt
-
-  apply:
-    name: Terraform Apply (manual)
-    runs-on: ubuntu-latest
-    needs: plan
-    if: github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout
@@ -146,42 +57,42 @@ jobs:
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
-      # Re-resolve RSA key for apply job (fresh runner)
-      # - name: Resolve SSH public key (prefer GitHub RSA; else generate)
-      #   shell: bash
-      #   run: |
-      #     set -euo pipefail
-      #     KEYS_JSON=$(curl -fsSL "https://api.github.com/users/${{ github.actor }}/keys")
-      #     PUB=$(echo "$KEYS_JSON" | jq -r '.[0].key // empty')
-      #     TYPE=$(echo "${PUB:-}" | awk '{print $1}')
-      #     if [ -z "${PUB:-}" ] || [ "$TYPE" != "ssh-rsa" ]; then
-      #       echo "::warning::GitHub profile key missing or not RSA (got: '${TYPE:-none}'). Generating ephemeral RSA 4096 keypair."
-      #       mkdir -p ~/.ssh && chmod 700 ~/.ssh
-      #       ssh-keygen -t rsa -b 4096 -N "" -C "gha-ephemeral-rsa@${GITHUB_REPOSITORY}" -f ~/.ssh/id_rsa >/dev/null 2>&1
-      #       chmod 600 ~/.ssh/id_rsa
-      #       PUB="$(cat ~/.ssh/id_rsa.pub)"
-      #       TYPE="ssh-rsa"
-      #       echo "::notice::Ephemeral RSA keypair created. Private key exists ONLY during this job."
-      #     fi
-      #     echo "Resolved SSH key type: ${TYPE}"
-      #     echo "TF_VAR_ssh_public_key=${PUB}" >> "$GITHUB_ENV"
+      - name: Terraform fmt
+        shell: bash
+        run: terraform fmt -recursive
 
       - name: Terraform Init
         shell: bash
-        working-directory: terraform
-        run: terraform init -upgrade  # -input=false 
+        run: terraform init -upgrade
 
       - name: Terraform Validate
         shell: bash
-        working-directory: terraform
         run: terraform validate
 
-      - name: Terraform Plan (re-create)
+      - name: Terraform Plan
+        id: tfplan
         shell: bash
-        working-directory: terraform
-        run: terraform plan -out=tfplan #-no-color -input=false
+        run: |
+          set -e
+          terraform plan -no-color -input=false -out=tfplan || ec=$?
+          if [ "${ec:-0}" -eq 1 ]; then
+            echo "::error::Terraform plan failed"
+            exit 1
+          fi
+          exit 0
 
-      - name: Terraform Apply
+      - name: Save plan as text
         shell: bash
-        working-directory: terraform
-        run: terraform apply -auto-approve tfplan  #-no-color -input=false
+        run: terraform show -no-color tfplan > plan.txt
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/plan.txt
+
+      # Apply only on push to main or manual dispatch (not on pull_request)
+      - name: Terraform Apply
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: terraform apply -auto-approve tfplan
