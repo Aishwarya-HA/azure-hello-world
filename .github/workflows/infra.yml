@@ -131,16 +131,13 @@ jobs:
         shell: bash
         working-directory: terraform
         run: terraform init -upgrade
-
-
         
-      # Validate (needs a dummy value so validate doesn't fail on required var)
       - name: Terraform Validate
         shell: bash
         working-directory: terraform
         env:
           TF_VAR_ssh_public_key: dummy
-         run: terraform validate
+        run: terraform validate
 
 
       - name: Terraform Plan (re-create)
