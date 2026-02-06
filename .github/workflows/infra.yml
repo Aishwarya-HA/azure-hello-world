@@ -130,18 +130,29 @@ jobs:
       - name: Terraform Init
         shell: bash
         working-directory: terraform
-        run: terraform init -input=false
+        run: terraform init -upgrade
+
+
+        
+      # Validate (needs a dummy value so validate doesn't fail on required var)
+      - name: Terraform Validate
+        shell: bash
+        working-directory: terraform
+        env:
+          TF_VAR_ssh_public_key: dummy
+         run: terraform validate
+
 
       - name: Terraform Plan (re-create)
         shell: bash
         working-directory: terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: terraform plan -no-color -input=false -out=plan.out
+        run: terraform plan -no-color -input=false 
 
       - name: Terraform Apply
         shell: bash
         working-directory: terraform
         env:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-        run: terraform apply -no-color -input=false -auto-approve plan.out
+        run: terraform apply -no-color -input=false 
