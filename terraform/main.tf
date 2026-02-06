@@ -79,7 +79,7 @@ module "web_vm" {
   admin_username = var.admin_username
 
   # ✅ Consistent key variable name
-  #ssh_public_key = var.ssh_public_key
+  ssh_public_key = var.ssh_public_key
 
   # (Optional) pass cloud-init file path (module will base64 it if provided)
   cloud_init_file = "${path.root}/cloud-init.yaml"
