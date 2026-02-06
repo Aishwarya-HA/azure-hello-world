@@ -22,6 +22,11 @@ jobs:
   destroy:
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm == 'DESTROY'
+
+    env:
+      TF_VAR_ssh_public_key: ${{ secrets.TF_VAR_SSH_PUBLIC_KEY }}
+
+      
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
