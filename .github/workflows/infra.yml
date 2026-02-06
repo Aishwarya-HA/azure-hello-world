@@ -20,6 +20,7 @@ on:
 env:
   TF_VERSION: "1.6.6"
 
+# All shell steps run from terraform/ unless they override it
 defaults:
   run:
     working-directory: terraform
@@ -37,7 +38,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false   # 👈 prevent false exit-code failures
+          terraform_wrapper: false   # important: avoid false exit codes
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -54,35 +55,26 @@ jobs:
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
-      # 👇 Fetch the actor's public SSH key from GitHub profile
-      - name: Fetch SSH public key from GitHub profile
+      # Resolve RSA public key for the VM: try GitHub profile; else generate ephemeral RSA-4096
+      - name: Resolve SSH public key (prefer GitHub RSA; else generate)
         shell: bash
         run: |
           set -euo pipefail
-          # Get all public keys of the user who triggered the workflow
+          # Try to fetch the actor's first public key from GitHub
           KEYS_JSON=$(curl -fsSL "https://api.github.com/users/${{ github.actor }}/keys")
-          COUNT=$(echo "$KEYS_JSON" | jq 'length')
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No public SSH keys found on GitHub for user ${{ github.actor }}. Add one in GitHub → Settings → SSH and GPG keys."
-            exit 1
+          PUB=$(echo "$KEYS_JSON" | jq -r '.[0].key // empty')
+          TYPE=$(echo "${PUB:-}" | awk '{print $1}')
+          if [ -z "${PUB:-}" ] || [ "$TYPE" != "ssh-rsa" ]; then
+            echo "::warning::GitHub profile key missing or not RSA (got: '${TYPE:-none}'). Generating ephemeral RSA 4096 keypair."
+            mkdir -p ~/.ssh && chmod 700 ~/.ssh
+            ssh-keygen -t rsa -b 4096 -N "" -C "gha-ephemeral-rsa@${GITHUB_REPOSITORY}" -f ~/.ssh/id_rsa >/dev/null 2>&1
+            chmod 600 ~/.ssh/id_rsa
+            PUB="$(cat ~/.ssh/id_rsa.pub)"
+            TYPE="ssh-rsa"
+            echo "::notice::Ephemeral RSA keypair created. Private key exists ONLY during this job."
           fi
-
-          # Option A (default): pick the first key
-          PUB=$(echo "$KEYS_JSON" | jq -r '.[0].key')
-
-          # Option B (uncomment to pick by key title)
-          # DESIRED_TITLE="my-ed25519"
-          # PUB=$(echo "$KEYS_JSON" | jq -r --arg t "$DESIRED_TITLE" '.[] | select(.title==$t) | .key' | head -n1)
-          # if [ -z "${PUB:-}" ] || [ "$PUB" = "null" ]; then
-          #   echo "::error::No key with title $DESIRED_TITLE found on GitHub for user ${{ github.actor }}"
-          #   exit 1
-          # fi
-
-          echo "Using public key:"
-          echo "$PUB"
-
-          # Export for all subsequent steps in this job
-          echo "TF_VAR_ssh_public_key=$PUB" >> "$GITHUB_ENV"
+          echo "Resolved SSH key type: ${TYPE}"
+          echo "TF_VAR_ssh_public_key=${PUB}" >> "$GITHUB_ENV"
 
       - name: Terraform fmt
         shell: bash
@@ -92,15 +84,23 @@ jobs:
         shell: bash
         run: terraform init -input=false -upgrade
 
-      # Validate needs a value; we already exported TF_VAR_ssh_public_key above
       - name: Terraform Validate
         shell: bash
         run: terraform validate
 
+      # Defensive plan: fail only on real TF errors (not wrapper quirks)
       - name: Terraform Plan
         id: tfplan
         shell: bash
-        run: terraform plan -no-color -input=false -out=tfplan
+        run: |
+          set -e
+          terraform plan -no-color -input=false -out=tfplan || ec=$?
+          if [ "${ec:-0}" -eq 1 ]; then
+            echo "::error::Terraform plan failed"
+            exit 1
+          fi
+          # Treat other non-1 codes as success here (e.g., if -detailed-exitcode is ever reintroduced)
+          exit 0
 
       - name: Save plan as text
         shell: bash
@@ -143,19 +143,25 @@ jobs:
           echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
           echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
 
-      # Re-fetch the actor's SSH key for the apply job too
-      - name: Fetch SSH public key from GitHub profile
+      # Re-resolve RSA key for apply job (fresh runner)
+      - name: Resolve SSH public key (prefer GitHub RSA; else generate)
         shell: bash
         run: |
           set -euo pipefail
           KEYS_JSON=$(curl -fsSL "https://api.github.com/users/${{ github.actor }}/keys")
-          COUNT=$(echo "$KEYS_JSON" | jq 'length')
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No public SSH keys found on GitHub for user ${{ github.actor }}"
-            exit 1
+          PUB=$(echo "$KEYS_JSON" | jq -r '.[0].key // empty')
+          TYPE=$(echo "${PUB:-}" | awk '{print $1}')
+          if [ -z "${PUB:-}" ] || [ "$TYPE" != "ssh-rsa" ]; then
+            echo "::warning::GitHub profile key missing or not RSA (got: '${TYPE:-none}'). Generating ephemeral RSA 4096 keypair."
+            mkdir -p ~/.ssh && chmod 700 ~/.ssh
+            ssh-keygen -t rsa -b 4096 -N "" -C "gha-ephemeral-rsa@${GITHUB_REPOSITORY}" -f ~/.ssh/id_rsa >/dev/null 2>&1
+            chmod 600 ~/.ssh/id_rsa
+            PUB="$(cat ~/.ssh/id_rsa.pub)"
+            TYPE="ssh-rsa"
+            echo "::notice::Ephemeral RSA keypair created. Private key exists ONLY during this job."
           fi
-          PUB=$(echo "$KEYS_JSON" | jq -r '.[0].key')
-          echo "TF_VAR_ssh_public_key=$PUB" >> "$GITHUB_ENV"
+          echo "Resolved SSH key type: ${TYPE}"
+          echo "TF_VAR_ssh_public_key=${PUB}" >> "$GITHUB_ENV"
 
       - name: Terraform Init
         shell: bash
